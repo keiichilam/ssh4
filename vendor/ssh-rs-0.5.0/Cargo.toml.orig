@@ -1,0 +1,83 @@
+[package]
+name = "ssh-rs"
+version = "0.5.0"
+edition = "2021"
+authors = [
+    "Gao Xiang Kang <1148118271@qq.com>",
+    "Jovi Hsu <jv.hsu@outlook.com>"
+]
+description = "In addition to encryption library, pure RUST implementation of SSH-2.0 client protocol"
+keywords = ["ssh", "sshAgreement", "sshClient"]
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/1148118271/ssh-rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+deprecated-algorithms = [
+    "deprecated-rsa-sha1",
+    "deprecated-dh-group1-sha1",
+    "deprecated-aes-cbc",
+    "deprecated-des-cbc",
+    "deprecated-dss-sha1"
+    ]
+deprecated-rsa-sha1 = ["dep:sha1"]
+deprecated-dss-sha1 = ["dep:sha1", "dep:dsa"]
+deprecated-dh-group1-sha1 = ["dep:sha1"]
+deprecated-aes-cbc = ["dep:cbc", "dep:cipher"]
+deprecated-des-cbc = ["dep:cbc", "dep:cipher", "dep:des"]
+deprecated-zlib = []
+scp = ["dep:filetime"]
+
+[lib]
+name = "ssh"
+path = "src/lib.rs"
+
+[dependencies]
+## error
+thiserror = "^1.0"
+
+## log
+tracing = { version = "0.1.36", features = ["log"] }
+
+## string enum
+strum = "0.25"
+strum_macros = "0.25"
+
+## algorithm
+rand = "0.8"
+num-bigint = { version = "0.4", features = ["rand"] }
+# the crate rsa has removed the internal hash implement from 0.7.0
+sha1  = { version = "0.10.5", default-features = false, features = ["oid"], optional = true }
+sha2  = { version = "0.10.6", default-features = false, features = ["oid"]}
+dsa = { version = "0.6.1", optional = true }
+rsa = "0.9"
+aes = "0.8"
+ctr = "0.9"
+des = { version = "0.8", optional = true }
+cbc = { version = "0.1", optional = true }
+cipher = { version = "0.4", optional = true }
+ssh-key = { version = "0.6", features = ["rsa", "ed25519", "alloc"]}
+signature = "2.1"
+ring = "0.17"
+
+## compression
+flate2 = "^1.0"
+
+## utils
+filetime = { version = "0.2", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
+
+
+[dev-dependencies]
+tracing-subscriber = { version = "^0.3" }
+paste = "1"
+
+
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+opt-level = 3
