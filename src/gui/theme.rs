@@ -249,6 +249,31 @@ const FONT_CANDIDATES: &[&str] = &[
     "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
 ];
 
+/// CJK fallback faces, appended after the monospace face so Han / kana /
+/// hangul glyphs render instead of tofu. Every candidate that exists is
+/// loaded: one face per script family keeps Japanese and Korean forms correct.
+#[cfg(windows)]
+const CJK_FONT_CANDIDATES: &[&str] = &[
+    "C:\\Windows\\Fonts\\msyh.ttc", // Microsoft YaHei (Simplified Chinese)
+    "C:\\Windows\\Fonts\\msjh.ttc", // Microsoft JhengHei (Traditional Chinese)
+    "C:\\Windows\\Fonts\\YuGothM.ttc", // Yu Gothic (Japanese)
+    "C:\\Windows\\Fonts\\msgothic.ttc", // MS Gothic (Japanese, older systems)
+    "C:\\Windows\\Fonts\\malgun.ttf", // Malgun Gothic (Korean)
+];
+#[cfg(target_os = "macos")]
+const CJK_FONT_CANDIDATES: &[&str] = &[
+    "/System/Library/Fonts/PingFang.ttc",         // Chinese
+    "/System/Library/Fonts/Hiragino Sans GB.ttc", // Chinese fallback
+    "/System/Library/Fonts/AppleSDGothicNeo.ttc", // Korean
+];
+#[cfg(all(unix, not(target_os = "macos")))]
+const CJK_FONT_CANDIDATES: &[&str] = &[
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/usr/share/fonts/wenquanyi/wqy-zenhei/wqy-zenhei.ttc",
+];
+
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     let found = FONT_CANDIDATES.iter().find_map(|p| std::fs::read(p).ok());
@@ -265,6 +290,18 @@ fn install_fonts(ctx: &egui::Context) {
         }
     }
     // No candidate found: egui's embedded Hack remains the monospace face.
+    for (i, path) in CJK_FONT_CANDIDATES.iter().enumerate() {
+        let Ok(data) = std::fs::read(path) else {
+            continue;
+        };
+        let name = format!("cjk-{i}");
+        fonts
+            .font_data
+            .insert(name.clone(), egui::FontData::from_owned(data));
+        for family in [FontFamily::Monospace, FontFamily::Proportional] {
+            fonts.families.entry(family).or_default().push(name.clone());
+        }
+    }
     ctx.set_fonts(fonts);
 }
 

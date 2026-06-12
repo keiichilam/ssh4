@@ -44,6 +44,46 @@ fn osc_color_reply(code: &str, rgb: (u8, u8, u8), bel_terminated: bool) -> Vec<u
     out
 }
 
+/// Withholds an incomplete trailing UTF-8 sequence between writes so a CJK
+/// character split across SSH reads is never written to the local console in
+/// two pieces (legacy Windows conhost renders each piece as garbage).
+/// Invalid bytes pass through untouched once more input arrives.
+#[derive(Debug, Default)]
+pub struct Utf8Carry {
+    tail: Vec<u8>,
+}
+
+impl Utf8Carry {
+    /// Prepend any carried bytes to `input` and return the longest prefix
+    /// that does not end mid-character; the remainder is carried over.
+    pub fn complete<'a>(&mut self, input: &'a [u8]) -> Vec<u8> {
+        let mut buf = std::mem::take(&mut self.tail);
+        buf.extend_from_slice(input);
+        let keep = buf.len() - incomplete_utf8_suffix(&buf);
+        self.tail = buf.split_off(keep);
+        buf
+    }
+}
+
+/// Length of an incomplete UTF-8 sequence at the end of `buf` (0 if the
+/// buffer ends on a character boundary or in invalid bytes).
+fn incomplete_utf8_suffix(buf: &[u8]) -> usize {
+    for i in 1..=buf.len().min(3) {
+        let b = buf[buf.len() - i];
+        if b & 0xc0 == 0x80 {
+            continue; // continuation byte: keep scanning for the lead
+        }
+        let need = match b {
+            0xc2..=0xdf => 2,
+            0xe0..=0xef => 3,
+            0xf0..=0xf4 => 4,
+            _ => return 0, // ASCII or invalid lead: nothing to wait for
+        };
+        return if need > i { i } else { 0 };
+    }
+    0
+}
+
 #[derive(Debug)]
 pub struct OutputParser {
     /// Buffered tail of an incomplete escape sequence from the previous read.
@@ -549,5 +589,56 @@ mod tests {
     fn utf8_data_unmolested() {
         let text = "héllo wörld — ✓".as_bytes();
         assert_eq!(one_shot(text), vec![Data(text.to_vec())]);
+    }
+
+    #[test]
+    fn cjk_data_unmolested() {
+        let text = "你好，世界 こんにちは 안녕하세요".as_bytes();
+        assert_eq!(one_shot(text), vec![Data(text.to_vec())]);
+        assert_split_invariant("\x1b[31m你好\x1b[0m".as_bytes());
+    }
+
+    #[test]
+    fn utf8_carry_passes_complete_text() {
+        let mut c = Utf8Carry::default();
+        assert_eq!(c.complete("hello 你好".as_bytes()), "hello 你好".as_bytes());
+        assert!(c.tail.is_empty());
+    }
+
+    #[test]
+    fn utf8_carry_holds_split_char_at_every_boundary() {
+        let text = "ab你好c".as_bytes();
+        for cut in 0..=text.len() {
+            let mut c = Utf8Carry::default();
+            let mut out = c.complete(&text[..cut]);
+            out.extend(c.complete(&text[cut..]));
+            assert_eq!(out, text, "split at byte {cut} diverged");
+            // Each emitted chunk must be valid UTF-8 on its own.
+            let mut c = Utf8Carry::default();
+            assert!(std::str::from_utf8(&c.complete(&text[..cut])).is_ok());
+        }
+    }
+
+    #[test]
+    fn utf8_carry_releases_invalid_bytes() {
+        let mut c = Utf8Carry::default();
+        // Lone continuation bytes and invalid leads pass through unchanged.
+        assert_eq!(c.complete(&[0x80, 0xfe, b'a']), vec![0x80, 0xfe, b'a']);
+        assert!(c.tail.is_empty());
+    }
+
+    #[test]
+    fn incomplete_suffix_detection() {
+        assert_eq!(incomplete_utf8_suffix(b"abc"), 0);
+        assert_eq!(incomplete_utf8_suffix("你好".as_bytes()), 0);
+        let nihao = "你".as_bytes(); // 3 bytes
+        assert_eq!(incomplete_utf8_suffix(&nihao[..1]), 1);
+        assert_eq!(incomplete_utf8_suffix(&nihao[..2]), 2);
+        let emoji = "🦀".as_bytes(); // 4 bytes
+        assert_eq!(incomplete_utf8_suffix(&emoji[..3]), 3);
+        // A complete char followed by an incomplete one.
+        let mut buf = "a你".as_bytes().to_vec();
+        buf.extend_from_slice(&emoji[..2]);
+        assert_eq!(incomplete_utf8_suffix(&buf), 2);
     }
 }

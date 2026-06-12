@@ -383,6 +383,13 @@ Renderer pipeline:
 
 Rendering should be deterministic and mostly pure. Keep side effects such as opening URLs, copying paths, or sending input outside the low-level paint loop where possible.
 
+CJK / wide-character handling:
+
+- The GUI appends platform CJK fallback fonts (YaHei/JhengHei/Yu Gothic/MS Gothic/Malgun on Windows, PingFang/Hiragino/Apple SD Gothic on macOS, Noto CJK / WenQuanYi on Linux) after the monospace face so Han, kana, and hangul render instead of tofu.
+- Wide cells (`vt100::Cell::is_wide`) are painted individually, centered in a two-cell rect, so batched narrow runs never drift from the grid; the cursor block widens to two cells over a wide glyph.
+- All column math (selection extraction, search match positions, link detection) uses `unicode-width` display cells, not char counts. Selection includes a wide char when either of its cells is touched; zero-width combining marks travel with their base char.
+- CLI mode forces the Windows console to the UTF-8 codepage (65001) on startup, and `terminal::output::Utf8Carry` withholds an incomplete trailing UTF-8 sequence between stdout writes so a CJK char split across SSH reads is never written in two pieces (legacy conhost renders split sequences as mojibake). The vt100 parser itself handles split UTF-8 statefully via vte.
+
 ### 6.4 Modal ownership
 
 When any modal or overlay is open, terminal input must not be forwarded.

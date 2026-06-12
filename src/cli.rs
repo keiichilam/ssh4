@@ -6,7 +6,7 @@ use crate::config::{Config, Profile};
 use crate::ssh_client::{self, ConnParams, Secret, READ_TIMEOUT, SSH_WRITE_CHUNK};
 use crate::terminal::input::{key_to_bytes, paste_payload};
 use crate::terminal::mouse::{self, MouseButton};
-use crate::terminal::output::{cpr_response, OutputParser, RemoteOutputEvent};
+use crate::terminal::output::{cpr_response, OutputParser, RemoteOutputEvent, Utf8Carry};
 use crate::terminal::selection::{CellPos, Selection};
 use crate::transfer;
 
@@ -151,7 +151,26 @@ fn resolve_params(args: &Cli, config: &Config) -> Result<(ConnParams, String), S
     Ok((params, remote_dir))
 }
 
+/// Switch the console to the UTF-8 codepage so CJK output renders instead of
+/// mojibake. Windows Terminal already defaults to UTF-8; legacy conhost often
+/// sits on a locale codepage like 936/932.
+#[cfg(windows)]
+fn enable_utf8_console() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetConsoleOutputCP(codepage: u32) -> i32;
+        fn SetConsoleCP(codepage: u32) -> i32;
+    }
+    const CP_UTF8: u32 = 65001;
+    unsafe {
+        SetConsoleOutputCP(CP_UTF8);
+        SetConsoleCP(CP_UTF8);
+    }
+}
+
 pub fn run(args: Cli) -> Result<(), String> {
+    #[cfg(windows)]
+    enable_utf8_console();
     let mut config = Config::load();
     let (params, remote_dir) = resolve_params(&args, &config)?;
 
@@ -309,6 +328,9 @@ fn run_session(
     let mut sent: u64 = 0;
     let mut received: u64 = 0;
     let mut parser = OutputParser::new();
+    // Defers a CJK char split across SSH reads so stdout never sees half of
+    // a UTF-8 sequence (legacy conhost renders split sequences as garbage).
+    let mut utf8_carry = Utf8Carry::default();
     // Mirror of the remote screen used for CPR answers and mouse selection.
     let mut screen = vt100::Parser::new(rows, cols, 0);
     let mut selection = Selection::default();
@@ -383,8 +405,11 @@ fn run_session(
                     for event in parser.process(&data) {
                         match event {
                             RemoteOutputEvent::Data(bytes) => {
+                                // The vt100 mirror handles split UTF-8 itself;
+                                // only the stdout write is boundary-buffered.
                                 screen.process(&bytes);
-                                stdout.write_all(&bytes).map_err(|e| e.to_string())?;
+                                let writable = utf8_carry.complete(&bytes);
+                                stdout.write_all(&writable).map_err(|e| e.to_string())?;
                             }
                             RemoteOutputEvent::Response(bytes) => {
                                 write_chunked(&mut shell, &bytes)?;

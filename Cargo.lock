@@ -4384,6 +4384,7 @@ dependencies = [
  "serde",
  "ssh-rs",
  "toml 0.8.23",
+ "unicode-width",
  "vt100",
  "winresource",
 ]

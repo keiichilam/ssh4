@@ -55,8 +55,10 @@ impl Selection {
         }
     }
 
-    /// Extract selected text given a row-text lookup. Trailing whitespace per
-    /// row is trimmed; rows are joined with `\n`.
+    /// Extract selected text given a row-text lookup. Columns are terminal
+    /// cells (wide CJK chars span two); a wide char is included when the
+    /// selection touches either of its cells. Trailing whitespace per row is
+    /// trimmed; rows are joined with `\n`.
     pub fn extract_text(&self, row_text: impl Fn(i32) -> String) -> String {
         let Some((s, e)) = self.normalized() else {
             return String::new();
@@ -64,26 +66,50 @@ impl Selection {
         let mut lines = Vec::new();
         for row in s.row..=e.row {
             let text = row_text(row);
-            let chars: Vec<char> = text.chars().collect();
             let from = if row == s.row {
                 s.col.max(0) as usize
             } else {
                 0
             };
             let to = if row == e.row {
-                ((e.col + 1).max(0) as usize).min(chars.len())
+                e.col.max(0) as usize
             } else {
-                chars.len()
+                usize::MAX
             };
-            let slice: String = if from < to {
-                chars[from..to].iter().collect()
-            } else {
-                String::new()
-            };
-            lines.push(slice.trim_end().to_string());
+            lines.push(slice_cells(&text, from, to).trim_end().to_string());
         }
         lines.join("\n")
     }
+}
+
+/// Slice `text` by terminal cell columns, inclusive of `to`. A character is
+/// included when its cell span intersects `[from, to]`; zero-width combining
+/// marks follow the character they attach to.
+fn slice_cells(text: &str, from: usize, to: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    let mut out = String::new();
+    let mut col = 0usize;
+    let mut included_prev = false;
+    for ch in text.chars() {
+        let w = ch.width().unwrap_or(0);
+        if w == 0 {
+            if included_prev {
+                out.push(ch);
+            }
+            continue;
+        }
+        let start = col;
+        col += w;
+        let include = start <= to && col > from;
+        included_prev = include;
+        if include {
+            out.push(ch);
+        }
+        if start > to {
+            break;
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -138,6 +164,33 @@ mod tests {
         s.drag(pos(0, 4));
         let text = s.extract_text(|_| "hello world".to_string());
         assert_eq!(text, "llo");
+    }
+
+    #[test]
+    fn extract_wide_chars_by_cell_column() {
+        // "你好ab": 你=cols 0-1, 好=cols 2-3, a=col 4, b=col 5.
+        let mut s = Selection::default();
+        s.start(pos(0, 2));
+        s.drag(pos(0, 4));
+        assert_eq!(s.extract_text(|_| "你好ab".to_string()), "好a");
+    }
+
+    #[test]
+    fn extract_includes_wide_char_touched_at_second_cell() {
+        // Selection starting on the trailing cell of 你 still grabs it.
+        let mut s = Selection::default();
+        s.start(pos(0, 1));
+        s.drag(pos(0, 2));
+        assert_eq!(s.extract_text(|_| "你好ab".to_string()), "你好");
+    }
+
+    #[test]
+    fn extract_keeps_combining_marks_with_base() {
+        // e + U+0301 occupies one cell; the mark must travel with the e.
+        let mut s = Selection::default();
+        s.start(pos(0, 0));
+        s.drag(pos(0, 1));
+        assert_eq!(s.extract_text(|_| "e\u{0301}x y".to_string()), "e\u{0301}x");
     }
 
     #[test]

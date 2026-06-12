@@ -68,12 +68,15 @@ impl SearchState {
                 };
                 let mut from = 0;
                 while let Some(pos) = hay[from..].find(&needle) {
-                    let col = hay[..from + pos].chars().count() as u16;
+                    // Columns and lengths are terminal cells: CJK chars
+                    // occupy two, so highlights stay aligned with the grid.
+                    use unicode_width::UnicodeWidthStr;
+                    let col = hay[..from + pos].width() as u16;
                     self.matches.push(Match {
                         scrollback: offset,
                         row,
                         col,
-                        len: needle.chars().count() as u16,
+                        len: needle.width().max(1) as u16,
                     });
                     from += pos + needle.len().max(1);
                 }

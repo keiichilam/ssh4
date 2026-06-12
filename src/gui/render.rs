@@ -323,10 +323,16 @@ fn handle_pointer(
     }
 }
 
+/// Terminal cell width of a string (CJK and other wide chars count as 2).
+fn display_width(s: &str) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    s.width()
+}
+
 /// Find a URL or absolute path span covering the given column.
 fn link_at(row_text: &str, col: usize) -> Option<String> {
     for (start, token) in tokenize(row_text) {
-        let len = token.chars().count();
+        let len = display_width(token);
         if col >= start && col < start + len {
             if token.starts_with("http://") || token.starts_with("https://") {
                 return Some(token.trim_end_matches([')', '.', ',', ';']).to_string());
@@ -339,7 +345,8 @@ fn link_at(row_text: &str, col: usize) -> Option<String> {
     None
 }
 
-/// Whitespace-separated tokens with their starting char column.
+/// Whitespace-separated tokens with their starting terminal column
+/// (display-width aware, so columns stay correct past CJK text).
 fn tokenize(text: &str) -> Vec<(usize, &str)> {
     let mut out = Vec::new();
     let mut col = 0;
@@ -348,7 +355,7 @@ fn tokenize(text: &str) -> Vec<(usize, &str)> {
         if !token.is_empty() {
             out.push((col, token));
         }
-        col += part.chars().count();
+        col += display_width(part);
     }
     out
 }
@@ -391,9 +398,12 @@ fn paint_screen(
     let screen = session.parser.screen();
     let (rows, cols) = screen.size();
 
-    // Background fills and text runs, batched per row by style.
+    // Background fills and text runs, batched per row by style. Wide (CJK)
+    // glyphs are painted individually in two-cell rects so the batched run's
+    // monospace advance never drifts from the grid.
     for row in 0..rows {
         let mut run = String::new();
+        let mut run_cells: u16 = 0;
         let mut run_start: u16 = 0;
         let mut run_fg = theme::current().term_fg;
         let mut run_bg: Option<Color32> = None;
@@ -402,6 +412,7 @@ fn paint_screen(
 
         let flush = |painter: &egui::Painter,
                      run: &mut String,
+                     cells: &mut u16,
                      start: u16,
                      fg: Color32,
                      bg: Option<Color32>,
@@ -410,8 +421,7 @@ fn paint_screen(
             if run.is_empty() {
                 return;
             }
-            let len = run.chars().count() as u16;
-            let rect = metrics.rect(row, start, len);
+            let rect = metrics.rect(row, start, *cells);
             if let Some(bg) = bg {
                 painter.rect_filled(rect, 0.0, bg);
             }
@@ -426,6 +436,7 @@ fn paint_screen(
                 );
             }
             run.clear();
+            *cells = 0;
         };
 
         for col in 0..cols {
@@ -450,6 +461,40 @@ fn paint_screen(
             let contents = cell.contents();
             let ch = if contents.is_empty() { " " } else { &contents };
 
+            if cell.is_wide() {
+                flush(
+                    painter,
+                    &mut run,
+                    &mut run_cells,
+                    run_start,
+                    run_fg,
+                    run_bg,
+                    run_underline,
+                    row,
+                );
+                let rect = metrics.rect(row, col, 2);
+                if let Some(bg) = bg {
+                    painter.rect_filled(rect, 0.0, bg);
+                }
+                painter.text(
+                    Pos2::new(rect.center().x, rect.top()),
+                    Align2::CENTER_TOP,
+                    ch,
+                    font.clone(),
+                    fg,
+                );
+                if underline {
+                    painter.line_segment(
+                        [
+                            Pos2::new(rect.left(), rect.bottom() - 1.0),
+                            Pos2::new(rect.right(), rect.bottom() - 1.0),
+                        ],
+                        Stroke::new(1.0, fg),
+                    );
+                }
+                continue;
+            }
+
             if run.is_empty() {
                 run_start = col;
                 run_fg = fg;
@@ -464,6 +509,7 @@ fn paint_screen(
                 flush(
                     painter,
                     &mut run,
+                    &mut run_cells,
                     run_start,
                     run_fg,
                     run_bg,
@@ -477,10 +523,12 @@ fn paint_screen(
                 run_underline = underline;
                 run.push_str(ch);
             }
+            run_cells += 1;
         }
         flush(
             painter,
             &mut run,
+            &mut run_cells,
             run_start,
             run_fg,
             run_bg,
@@ -492,7 +540,7 @@ fn paint_screen(
         let text = screen.contents_between(row, 0, row + 1, 0);
         for (start, token) in tokenize(&text) {
             if token.starts_with("http://") || token.starts_with("https://") {
-                let rect = metrics.rect(row, start as u16, token.chars().count() as u16);
+                let rect = metrics.rect(row, start as u16, display_width(token) as u16);
                 painter.line_segment(
                     [
                         Pos2::new(rect.left(), rect.bottom() - 1.0),
@@ -546,14 +594,19 @@ fn paint_screen(
             }
         }
 
-        let rect = metrics.rect(r, c, 1);
+        // A wide (CJK) glyph under the cursor needs a two-cell block.
+        let cursor_cells = match screen.cell(r, c) {
+            Some(cell) if cell.is_wide() => 2,
+            _ => 1,
+        };
+        let rect = metrics.rect(r, c, cursor_cells);
         painter.rect_filled(rect, 1.0, theme::current().cursor.gamma_multiply(0.8));
         if let Some(cell) = screen.cell(r, c) {
             let contents = cell.contents();
             if !contents.is_empty() {
                 painter.text(
-                    rect.min,
-                    Align2::LEFT_TOP,
+                    Pos2::new(rect.center().x, rect.top()),
+                    Align2::CENTER_TOP,
                     contents,
                     font.clone(),
                     theme::current().term_bg,
@@ -590,5 +643,31 @@ mod tests {
     #[test]
     fn url_encode_handles_utf8() {
         assert_eq!(url_encode("héllo"), "h%C3%A9llo");
+    }
+
+    #[test]
+    fn tokenize_columns_count_wide_chars_as_two() {
+        // "你好 x": 你好 spans cols 0-3, the space is col 4, x starts at col 5.
+        let tokens = tokenize("你好 x");
+        assert_eq!(tokens, vec![(0, "你好"), (5, "x")]);
+    }
+
+    #[test]
+    fn link_at_past_cjk_text() {
+        // URL starts at col 5 (after a 2x2-cell CJK token and a space).
+        let row = "你好 https://example.com tail";
+        assert_eq!(link_at(row, 4), None); // the space
+        assert_eq!(
+            link_at(row, 6).as_deref(),
+            Some("https://example.com"),
+            "column inside the URL must resolve despite preceding wide chars"
+        );
+    }
+
+    #[test]
+    fn display_width_counts_cells() {
+        assert_eq!(display_width("abc"), 3);
+        assert_eq!(display_width("你好"), 4);
+        assert_eq!(display_width("ｱｲｳ"), 3); // halfwidth katakana stay 1 cell
     }
 }
