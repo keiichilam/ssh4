@@ -74,6 +74,85 @@ fn chrome_shadow() -> egui::Shadow {
     }
 }
 
+/// Estimate the pill row's natural width (tabs + gaps + "+" button + the
+/// frame's inner margins) so `tab_bar` can decide whether it fits within
+/// the clamped width or needs to scroll. Only used for that fit/scroll
+/// decision, so small estimation error near the boundary is harmless.
+fn tab_row_width(ui: &egui::Ui, tabs: &[TabInfo]) -> f32 {
+    let font = theme::font(Weight::Medium, 12.5);
+    // Per pill: 10+10 side margins + 7 dot + 4 dot/label gap + label galley.
+    let pills: f32 = tabs
+        .iter()
+        .map(|tab| {
+            let label = ui.fonts(|f| {
+                f.layout_no_wrap(tab.title.clone(), font.clone(), Color32::WHITE)
+                    .rect
+                    .width()
+            });
+            31.0 + label
+        })
+        .sum();
+    // 8 = frame inner margins; 26 = "+" tile; 4 per gap between the n pills
+    // and the trailing "+" (n items + button => n gaps).
+    8.0 + pills + 26.0 + 4.0 * tabs.len() as f32
+}
+
+/// The horizontal row of tab pills plus the trailing "+" tile.
+fn tab_row(ui: &mut egui::Ui, tabs: &[TabInfo], active: usize) -> TabAction {
+    let mut action = TabAction::None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (i, tab) in tabs.iter().enumerate() {
+            let resp = tab_pill(ui, tab, i == active);
+            if resp.clicked() {
+                action = TabAction::Select(i);
+            }
+            if resp.middle_clicked() {
+                action = TabAction::Close(i);
+            }
+            resp.context_menu(|ui| {
+                if ui.button("Close").clicked() {
+                    action = TabAction::Close(i);
+                    ui.close_menu();
+                }
+                if ui.button("Close others").clicked() {
+                    action = TabAction::CloseOthers(i);
+                    ui.close_menu();
+                }
+                if ui.button("Close tabs to the right").clicked() {
+                    action = TabAction::CloseRight(i);
+                    ui.close_menu();
+                }
+                ui.separator();
+                ui.menu_button("Tab color", |ui| {
+                    for (name, color) in theme::tab_colors() {
+                        if ui.button(egui::RichText::new(name).color(color)).clicked() {
+                            action = TabAction::SetColor(i, Some(color));
+                            ui.close_menu();
+                        }
+                    }
+                    if ui.button("None").clicked() {
+                        action = TabAction::SetColor(i, None);
+                        ui.close_menu();
+                    }
+                });
+            });
+        }
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "+",
+            theme::font(Weight::SemiBold, 15.0),
+            theme::chrome().accent,
+        );
+        if resp.clicked() {
+            action = TabAction::New;
+        }
+    });
+    action
+}
+
 pub fn tab_bar(
     ui: &mut egui::Ui,
     tabs: &[TabInfo],
@@ -112,6 +191,12 @@ pub fn tab_bar(
     // the window's horizontal center matches the mockup's "floating pill"
     // and centers cleanly; the 60pt top strip already reserves the
     // vertical space so nothing renders underneath it.
+    //
+    // Clamp the pill to `max_w` — the window width minus a reserve on each
+    // side for the logo and the trailing controls — so many/long tabs can
+    // never grow into them; the row scrolls horizontally past that point.
+    let max_w = (ui.ctx().screen_rect().width() - 300.0).max(220.0);
+    let needs_scroll = tab_row_width(ui, tabs) > max_w;
     egui::Area::new(egui::Id::new("tab_switcher"))
         .anchor(egui::Align2::CENTER_TOP, [0.0, 13.0])
         .order(egui::Order::Middle)
@@ -121,60 +206,21 @@ pub fn tab_bar(
                 .rounding(Rounding::same(14.0))
                 .inner_margin(egui::Margin::same(4.0))
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        for (i, tab) in tabs.iter().enumerate() {
-                            let resp = tab_pill(ui, tab, i == active);
-                            if resp.clicked() {
-                                action = TabAction::Select(i);
-                            }
-                            if resp.middle_clicked() {
-                                action = TabAction::Close(i);
-                            }
-                            resp.context_menu(|ui| {
-                                if ui.button("Close").clicked() {
-                                    action = TabAction::Close(i);
-                                    ui.close_menu();
+                    if needs_scroll {
+                        egui::ScrollArea::horizontal()
+                            .max_width(max_w)
+                            .show(ui, |ui| {
+                                let a = tab_row(ui, tabs, active);
+                                if !matches!(a, TabAction::None) {
+                                    action = a;
                                 }
-                                if ui.button("Close others").clicked() {
-                                    action = TabAction::CloseOthers(i);
-                                    ui.close_menu();
-                                }
-                                if ui.button("Close tabs to the right").clicked() {
-                                    action = TabAction::CloseRight(i);
-                                    ui.close_menu();
-                                }
-                                ui.separator();
-                                ui.menu_button("Tab color", |ui| {
-                                    for (name, color) in theme::tab_colors() {
-                                        if ui
-                                            .button(egui::RichText::new(name).color(color))
-                                            .clicked()
-                                        {
-                                            action = TabAction::SetColor(i, Some(color));
-                                            ui.close_menu();
-                                        }
-                                    }
-                                    if ui.button("None").clicked() {
-                                        action = TabAction::SetColor(i, None);
-                                        ui.close_menu();
-                                    }
-                                });
                             });
+                    } else {
+                        let a = tab_row(ui, tabs, active);
+                        if !matches!(a, TabAction::None) {
+                            action = a;
                         }
-                        let (rect, resp) =
-                            ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
-                        ui.painter().text(
-                            rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "+",
-                            theme::font(Weight::SemiBold, 15.0),
-                            theme::chrome().accent,
-                        );
-                        if resp.clicked() {
-                            action = TabAction::New;
-                        }
-                    });
+                    }
                 });
         });
 
