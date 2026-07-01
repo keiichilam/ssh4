@@ -4,10 +4,12 @@
 //! same pattern as transfers) and report back over a channel; the UI thread
 //! never blocks on the network. Destructive operations always confirm.
 
-use crate::gui::{dialogs, theme};
+use crate::gui::theme::Weight;
+use crate::gui::{chrome, dialogs, theme};
 use crate::remote_fs::{self, RemoteEntry};
 use crate::ssh_client::ConnParams;
 use crate::transfer;
+use egui::{Color32, Rounding};
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -105,6 +107,15 @@ impl Default for FileTools {
             watch_stop: Arc::new(AtomicBool::new(false)),
         }
     }
+}
+
+/// A rounded, off-white panel wrapping one pane's content (local/remote).
+fn pane_frame(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::none()
+        .fill(Color32::from_rgb(0xfa, 0xfa, 0xfa))
+        .rounding(Rounding::same(16.0))
+        .inner_margin(egui::Margin::same(12.0))
+        .show(ui, add_contents);
 }
 
 fn read_local(dir: &Path) -> Vec<LocalEntry> {
@@ -275,24 +286,43 @@ impl FileTools {
             self.local_dirty = false;
         }
 
+        let t = theme::chrome();
         let mut open = self.open;
         egui::Window::new("File Tools")
-            .open(&mut open)
+            .id(egui::Id::new("file_tools_window"))
+            .title_bar(false)
             .default_size([840.0, 480.0])
             .resizable(true)
+            .frame(chrome::card_frame(24.0).inner_margin(egui::Margin::same(16.0)))
             .show(ctx, |ui| {
-                ui.columns(2, |cols| {
-                    self.local_pane(&mut cols[0], session);
-                    self.remote_pane(&mut cols[1], session);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("File tools")
+                            .font(theme::font(Weight::SemiBold, 12.5))
+                            .color(t.text_primary),
+                    );
+                    if let Some((params, _)) = session {
+                        ui.label(
+                            egui::RichText::new(format!("{}@{}", params.user, params.host))
+                                .font(theme::font(Weight::Regular, 12.0))
+                                .color(t.text_dim),
+                        );
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("✕").on_hover_text("Close").clicked() {
+                            open = false;
+                        }
+                    });
                 });
-                ui.separator();
+                ui.add_space(10.0);
+                ui.columns(2, |cols| {
+                    pane_frame(&mut cols[0], |ui| self.local_pane(ui, session));
+                    pane_frame(&mut cols[1], |ui| self.remote_pane(ui, session));
+                });
+                ui.add_space(6.0);
                 if let Some((msg, ok, at)) = &self.status {
                     if at.elapsed() < Duration::from_secs(8) {
-                        let color = if *ok {
-                            theme::current().success
-                        } else {
-                            theme::current().error
-                        };
+                        let color = if *ok { t.success } else { t.error };
                         ui.colored_label(color, msg);
                     }
                 }
@@ -304,7 +334,8 @@ impl FileTools {
     }
 
     fn local_pane(&mut self, ui: &mut egui::Ui, session: Option<(&ConnParams, &str)>) {
-        theme::section_header(ui, "LOCAL");
+        theme::section_header(ui, &format!("LOCAL · {}", self.local_dir.display()));
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
             if ui.button("⬆").on_hover_text("Parent folder").clicked() {
                 if let Some(parent) = self.local_dir.parent().map(Path::to_path_buf) {
@@ -312,7 +343,6 @@ impl FileTools {
                     self.local_dirty = true;
                 }
             }
-            ui.label(self.local_dir.display().to_string());
         });
         ui.add_space(4.0);
 
@@ -445,19 +475,19 @@ impl FileTools {
     }
 
     fn remote_pane(&mut self, ui: &mut egui::Ui, session: Option<(&ConnParams, &str)>) {
-        theme::section_header(ui, "REMOTE");
+        theme::section_header(ui, &format!("REMOTE · {}", self.remote_dir));
         let Some((params, _)) = session else {
             ui.add_space(8.0);
             ui.weak("Open an SSH tab to browse remote files.");
             return;
         };
+        ui.add_space(4.0);
 
         ui.horizontal(|ui| {
             if ui.button("⬆").on_hover_text("Parent folder").clicked() {
                 let parent = remote_fs::parent(&self.remote_dir);
                 self.list_remote(params, parent);
             }
-            ui.label(&self.remote_dir);
             if self.listing {
                 ui.spinner();
             }
@@ -625,7 +655,7 @@ impl FileTools {
                 edit.request_focus();
                 if let NameDialog::Chmod { mode, .. } = &self.dialog {
                     if !remote_fs::valid_mode(mode) {
-                        ui.colored_label(theme::current().error, "Octal mode, e.g. 644 or 755");
+                        ui.colored_label(theme::chrome().error, "Octal mode, e.g. 644 or 755");
                     }
                 }
                 ui.horizontal(|ui| {
@@ -723,7 +753,7 @@ impl FileTools {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     let del = egui::Button::new(
-                        egui::RichText::new("Delete").color(theme::current().error),
+                        egui::RichText::new("Delete").color(theme::chrome().error),
                     );
                     if ui.add(del).clicked() {
                         done = true;

@@ -339,7 +339,7 @@ Acceptance:
 | Rich SCP tools | docs/TODO target, not current source | 11 | Implemented (`remote_fs.rs`, `gui/files.rs`: list/upload/download/create/rename/chmod/delete-with-confirm, edit-with-auto-upload) |
 | Local file manager | TODO target | 11 | Implemented (local pane of the File Tools window) |
 | Command palette | TODO target | 11 | Implemented (Ctrl+Shift+K) |
-| Theme switching | TODO/design audit target | 11 | Implemented (Amber Phosphor / Green Phosphor / Paper, persisted) |
+| Theme switching | TODO/design audit target | 11 | Implemented (Lavender / Amber Phosphor / Green Phosphor, persisted) |
 
 ## 16. Risk Register
 

@@ -1,10 +1,11 @@
 //! Theme system (TR-004): named color roles, selectable built-in themes.
 //!
 //! Every UI color is a named role on [`Theme`]; painting code reads the
-//! active theme through [`current()`]. Three built-ins ship: the signature
-//! "Amber Phosphor", a "Green Phosphor" sibling, and a light "Paper" theme.
-//! The whole UI renders in one monospace face (platform candidates below),
-//! so chrome and terminal read as a single instrument.
+//! active theme through [`current()`]. Three built-ins ship: the light
+//! "Lavender" default (FlashLearn design language), the signature "Amber
+//! Phosphor", and a "Green Phosphor" sibling. Chrome renders in Inter
+//! (see [`install_fonts()`]); the terminal canvas keeps a monospace face
+//! (platform candidates below) regardless of the active theme.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -49,6 +50,49 @@ pub struct Theme {
 const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
+
+/// Lavender canvas with a violet accent, after the FlashLearn design
+/// system. The light default theme.
+pub static LAVENDER: Theme = Theme {
+    name: "Lavender",
+    dark: false,
+    surface_bg: rgb(0xf5, 0xf4, 0xff),
+    surface_panel: rgb(0xf5, 0xf4, 0xff),
+    surface_raised: rgb(0xff, 0xff, 0xff),
+    surface_hover: rgb(0xf5, 0xf3, 0xff),
+    border: rgb(0xe9, 0xe7, 0xf5),
+    text_primary: rgb(0x0f, 0x17, 0x2a),
+    text_dim: rgb(0x94, 0xa3, 0xb8),
+    accent: rgb(0x7c, 0x3a, 0xed),
+    accent_dim: rgb(0xa7, 0x8b, 0xfa),
+    error: rgb(0xef, 0x44, 0x44),
+    success: rgb(0x10, 0xb9, 0x81),
+    term_bg: rgb(0xfb, 0xfa, 0xff),
+    term_fg: rgb(0x0f, 0x17, 0x2a),
+    cursor: rgb(0x7c, 0x3a, 0xed),
+    selection_bg: rgb(0xed, 0xe9, 0xfe),
+    search_match_bg: rgb(0xfe, 0xf3, 0xc7),
+    search_active_bg: rgb(0xfb, 0xbf, 0x24),
+    link: rgb(0x4f, 0x46, 0xe5),
+    ansi: [
+        rgb(0x1e, 0x29, 0x3b), // black
+        rgb(0xdc, 0x26, 0x26), // red
+        rgb(0x15, 0x80, 0x3d), // green
+        rgb(0xb4, 0x53, 0x09), // yellow
+        rgb(0x25, 0x63, 0xeb), // blue
+        rgb(0x7c, 0x3a, 0xed), // magenta
+        rgb(0x08, 0x91, 0xb2), // cyan
+        rgb(0x64, 0x74, 0x8b), // white
+        rgb(0x47, 0x55, 0x69), // bright black
+        rgb(0xef, 0x44, 0x44), // bright red
+        rgb(0x22, 0xc5, 0x5e), // bright green
+        rgb(0xf5, 0x9e, 0x0b), // bright yellow
+        rgb(0x3b, 0x82, 0xf6), // bright blue
+        rgb(0xa7, 0x8b, 0xfa), // bright magenta
+        rgb(0x06, 0xb6, 0xd4), // bright cyan
+        rgb(0x0f, 0x17, 0x2a), // bright white
+    ],
+};
 
 /// Deep warm-charcoal surfaces with a phosphor-amber accent, after the DEC
 /// VT terminals this app descends from.
@@ -135,56 +179,25 @@ pub static GREEN_PHOSPHOR: Theme = Theme {
     ],
 };
 
-/// Warm paper-white surfaces with ink text, for daylight work.
-pub static PAPER: Theme = Theme {
-    name: "Paper",
-    dark: false,
-    surface_bg: rgb(0xf2, 0xed, 0xe2),
-    surface_panel: rgb(0xea, 0xe4, 0xd6),
-    surface_raised: rgb(0xde, 0xd6, 0xc4),
-    surface_hover: rgb(0xd2, 0xc8, 0xb2),
-    border: rgb(0xb8, 0xac, 0x94),
-    text_primary: rgb(0x2c, 0x28, 0x20),
-    text_dim: rgb(0x6e, 0x66, 0x56),
-    accent: rgb(0xa6, 0x5c, 0x00),
-    accent_dim: rgb(0xc8, 0x8a, 0x3c),
-    error: rgb(0xb3, 0x2d, 0x23),
-    success: rgb(0x4a, 0x77, 0x1f),
-    term_bg: rgb(0xfa, 0xf6, 0xec),
-    term_fg: rgb(0x2c, 0x28, 0x20),
-    cursor: rgb(0xa6, 0x5c, 0x00),
-    selection_bg: rgb(0xe8, 0xd2, 0xa4),
-    search_match_bg: rgb(0xf0, 0xdc, 0x9a),
-    search_active_bg: rgb(0xe0, 0xa8, 0x3a),
-    link: rgb(0x1f, 0x5c, 0x99),
-    ansi: [
-        rgb(0x2c, 0x28, 0x20), // black
-        rgb(0xb3, 0x2d, 0x23), // red
-        rgb(0x4a, 0x77, 0x1f), // green
-        rgb(0x9a, 0x6e, 0x00), // yellow
-        rgb(0x1f, 0x5c, 0x99), // blue
-        rgb(0x8f, 0x3f, 0x8c), // magenta
-        rgb(0x1c, 0x7a, 0x6e), // cyan
-        rgb(0x8a, 0x82, 0x70), // white
-        rgb(0x5a, 0x54, 0x48), // bright black
-        rgb(0xd4, 0x4d, 0x42), // bright red
-        rgb(0x63, 0x96, 0x33), // bright green
-        rgb(0xb8, 0x88, 0x10), // bright yellow
-        rgb(0x3a, 0x7c, 0xc0), // bright blue
-        rgb(0xb0, 0x5c, 0xac), // bright magenta
-        rgb(0x32, 0x99, 0x8c), // bright cyan
-        rgb(0xff, 0xff, 0xff), // bright white
-    ],
-};
-
 /// Built-in themes, in picker order.
-pub static THEMES: [&Theme; 3] = [&AMBER_PHOSPHOR, &GREEN_PHOSPHOR, &PAPER];
+pub static THEMES: [&Theme; 3] = [&LAVENDER, &AMBER_PHOSPHOR, &GREEN_PHOSPHOR];
 
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
 
-/// The active theme. Painting code reads colors through this.
+/// The active theme. Only the terminal canvas (grid cells, cursor,
+/// selection, search highlight, ANSI palette) reads colors through this —
+/// see [`chrome()`] for everything else.
 pub fn current() -> &'static Theme {
     THEMES[CURRENT.load(Ordering::Relaxed).min(THEMES.len() - 1)]
+}
+
+/// The fixed FlashLearn chrome palette (dock, flyout, tab switcher,
+/// terminal-card frame/header, dialogs, file tools). Per the redesign
+/// brief, chrome never changes with the terminal theme picker — only the
+/// terminal canvas itself does — so this always resolves to [`LAVENDER`]
+/// regardless of [`current()`].
+pub fn chrome() -> &'static Theme {
+    &LAVENDER
 }
 
 /// Index of the active theme in [`THEMES`].
@@ -274,22 +287,95 @@ const CJK_FONT_CANDIDATES: &[&str] = &[
     "/usr/share/fonts/wenquanyi/wqy-zenhei/wqy-zenhei.ttc",
 ];
 
+/// Bundled Inter weights (OFL-1.1, `assets/fonts/LICENSE.txt`) used for all
+/// chrome text. egui has no font-weight axis, so each weight gets its own
+/// named [`FontFamily::Name`]; pick one explicitly via [`font()`].
+/// `Proportional` itself defaults to regular (400).
+const INTER_WEIGHTS: &[(&str, &[u8])] = &[
+    (
+        "inter-400",
+        include_bytes!("../../assets/fonts/Inter-Regular.ttf"),
+    ),
+    (
+        "inter-500",
+        include_bytes!("../../assets/fonts/Inter-Medium.ttf"),
+    ),
+    (
+        "inter-600",
+        include_bytes!("../../assets/fonts/Inter-SemiBold.ttf"),
+    ),
+    (
+        "inter-700",
+        include_bytes!("../../assets/fonts/Inter-Bold.ttf"),
+    ),
+];
+
+/// A chrome font weight, mapped to one of the bundled Inter faces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Weight {
+    Regular,
+    Medium,
+    SemiBold,
+    Bold,
+}
+
+impl Weight {
+    fn family_name(self) -> &'static str {
+        match self {
+            Weight::Regular => "inter-400",
+            Weight::Medium => "inter-500",
+            Weight::SemiBold => "inter-600",
+            Weight::Bold => "inter-700",
+        }
+    }
+}
+
+/// A chrome [`egui::FontId`] at the given weight and size. Only the
+/// terminal canvas should use `FontFamily::Monospace`/`TextStyle::Monospace`
+/// directly; everything else should go through this (or `Weight::Regular`
+/// via the default `Proportional` family) to render in Inter.
+pub fn font(weight: Weight, size: f32) -> egui::FontId {
+    egui::FontId::new(size, FontFamily::Name(weight.family_name().into()))
+}
+
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
+
+    // Monospace: platform candidate, used only by the terminal canvas.
     let found = FONT_CANDIDATES.iter().find_map(|p| std::fs::read(p).ok());
     if let Some(data) = found {
         fonts
             .font_data
             .insert("ui-mono".to_owned(), egui::FontData::from_owned(data));
-        for family in [FontFamily::Monospace, FontFamily::Proportional] {
-            fonts
-                .families
-                .entry(family)
-                .or_default()
-                .insert(0, "ui-mono".to_owned());
-        }
+        fonts
+            .families
+            .entry(FontFamily::Monospace)
+            .or_default()
+            .insert(0, "ui-mono".to_owned());
     }
     // No candidate found: egui's embedded Hack remains the monospace face.
+
+    // Proportional/chrome: bundled Inter, one named family per weight;
+    // `Proportional` itself is pointed at regular (400).
+    for &(name, data) in INTER_WEIGHTS {
+        fonts
+            .font_data
+            .insert(name.to_owned(), egui::FontData::from_owned(data.to_vec()));
+        fonts
+            .families
+            .entry(FontFamily::Name(name.into()))
+            .or_default()
+            .insert(0, name.to_owned());
+    }
+    fonts
+        .families
+        .entry(FontFamily::Proportional)
+        .or_default()
+        .insert(0, "inter-400".to_owned());
+
+    // CJK fallback faces, appended after the primary face in every family
+    // (monospace, proportional, and each Inter weight) so Han / kana /
+    // hangul glyphs render instead of tofu.
     for (i, path) in CJK_FONT_CANDIDATES.iter().enumerate() {
         let Ok(data) = std::fs::read(path) else {
             continue;
@@ -298,19 +384,33 @@ fn install_fonts(ctx: &egui::Context) {
         fonts
             .font_data
             .insert(name.clone(), egui::FontData::from_owned(data));
-        for family in [FontFamily::Monospace, FontFamily::Proportional] {
-            fonts.families.entry(family).or_default().push(name.clone());
+        fonts
+            .families
+            .entry(FontFamily::Monospace)
+            .or_default()
+            .push(name.clone());
+        fonts
+            .families
+            .entry(FontFamily::Proportional)
+            .or_default()
+            .push(name.clone());
+        for &(family_name, _) in INTER_WEIGHTS {
+            fonts
+                .families
+                .entry(FontFamily::Name(family_name.into()))
+                .or_default()
+                .push(name.clone());
         }
     }
     ctx.set_fonts(fonts);
 }
 
-/// Small uppercase label used for sidebar/dialog section headers.
+/// Small uppercase label used for dock/dialog section headers (chrome).
 pub fn section_header(ui: &mut egui::Ui, label: &str) {
     ui.label(
         egui::RichText::new(label)
             .size(11.0)
-            .color(current().text_dim)
+            .color(chrome().text_dim)
             .strong(),
     );
 }
@@ -321,9 +421,12 @@ pub fn apply(ctx: &egui::Context) {
     apply_style(ctx);
 }
 
-/// Apply the active theme's style (no font reload).
+/// Apply the chrome style (no font reload). Chrome is always the fixed
+/// Lavender palette — see [`chrome()`] — regardless of the active
+/// terminal theme, so egui's default widget visuals (buttons, checkboxes,
+/// scrollbars, text-edit carets) stay consistent across theme switches.
 fn apply_style(ctx: &egui::Context) {
-    let t = current();
+    let t = chrome();
 
     let mut style = (*ctx.style()).clone();
     style.spacing.item_spacing = Vec2::new(8.0, 6.0);
@@ -391,9 +494,9 @@ fn apply_style(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
-/// Tab accent color choices (drawn from the active theme).
+/// Tab accent color choices (chrome — fixed regardless of terminal theme).
 pub fn tab_colors() -> [(&'static str, Color32); 6] {
-    let t = current();
+    let t = chrome();
     [
         ("Accent", t.accent),
         ("Green", t.ansi[2]),
@@ -410,8 +513,8 @@ mod tests {
 
     #[test]
     fn theme_names_resolve() {
-        assert_eq!(index_by_name("amber phosphor"), Some(0));
-        assert_eq!(index_by_name("Paper"), Some(2));
+        assert_eq!(index_by_name("lavender"), Some(0));
+        assert_eq!(index_by_name("Amber Phosphor"), Some(1));
         assert_eq!(index_by_name("nope"), None);
     }
 

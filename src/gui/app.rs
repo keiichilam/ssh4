@@ -2,12 +2,13 @@
 
 use crate::auth;
 use crate::config::{Config, Profile, Snippet};
+use crate::gui::chrome;
 use crate::gui::dialogs::{self, Modal, PaletteAction, PasteAction, UploadAction};
+use crate::gui::dock::{self, DockAction, DockSection, DockState};
 use crate::gui::files::FileTools;
 use crate::gui::render;
 use crate::gui::search::SearchState;
 use crate::gui::session::{PendingConn, Session};
-use crate::gui::sidebar::{self, SidebarAction, SidebarState};
 use crate::gui::tabs::{tab_bar, TabAction, TabInfo};
 use crate::gui::theme;
 use crate::ssh_client::{ConnParams, Secret};
@@ -95,7 +96,8 @@ pub struct App {
     focus_mode: bool,
     sync_input: bool,
     modal: Modal,
-    sidebar: SidebarState,
+    dock: DockState,
+    active_flyout: Option<DockSection>,
     transfer_tx: Sender<TransferResult>,
     transfer_rx: Receiver<TransferResult>,
     file_tools: FileTools,
@@ -110,10 +112,9 @@ impl App {
         theme::apply(&cc.egui_ctx);
         cc.egui_ctx.set_zoom_factor(config.ui_zoom.clamp(0.7, 2.0));
         let (transfer_tx, transfer_rx) = std::sync::mpsc::channel();
-        let sidebar = SidebarState {
-            debug_log: false,
-            font_size: 14.0,
+        let dock = DockState {
             ui_zoom: config.ui_zoom,
+            ..DockState::default()
         };
         let mut app = App {
             config,
@@ -123,7 +124,8 @@ impl App {
             focus_mode: false,
             sync_input: false,
             modal: Modal::None,
-            sidebar,
+            dock,
+            active_flyout: Some(DockSection::Hosts),
             transfer_tx,
             transfer_rx,
             file_tools: FileTools::default(),
@@ -139,7 +141,7 @@ impl App {
     }
 
     fn debug_log(&self, msg: &str) {
-        if !self.sidebar.debug_log {
+        if !self.dock.debug_log {
             return;
         }
         if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -413,48 +415,6 @@ impl App {
         }
     }
 
-    fn status_bar(ui: &mut egui::Ui, session: &Session) {
-        ui.horizontal(|ui| {
-            let dot = if session.connected { "●" } else { "○" };
-            let color = if session.connected {
-                theme::current().success
-            } else {
-                theme::current().text_dim
-            };
-            ui.colored_label(color, dot);
-            ui.label(&session.identity);
-            ui.weak(format!("{}×{}", session.cols, session.rows));
-            ui.weak(format!(
-                "↑{} ↓{}",
-                dialogs::human_size(session.sent),
-                dialogs::human_size(session.received)
-            ));
-            ui.weak(format!(
-                "idle {}s",
-                session.last_data_at.elapsed().as_secs()
-            ));
-            if let Some(hb) = &session.heartbeat {
-                ui.weak(format!(
-                    "hb {}s ago · q{} · buf{} · to{}",
-                    hb.at.elapsed().as_secs(),
-                    hb.pending_chunks,
-                    hb.buffered_output,
-                    hb.read_timeouts
-                ));
-            }
-            if let Some((msg, is_ok, at)) = &session.status {
-                if at.elapsed() < Duration::from_secs(6) {
-                    let c = if *is_ok {
-                        theme::current().success
-                    } else {
-                        theme::current().error
-                    };
-                    ui.colored_label(c, msg);
-                }
-            }
-        });
-    }
-
     fn find_bar(ui: &mut egui::Ui, search: &mut SearchState, session: &mut Session) {
         ui.horizontal(|ui| {
             ui.label("Find:");
@@ -562,72 +522,154 @@ impl eframe::App for App {
             };
         }
 
-        // Sidebar.
+        // Dock rail + flyout. F11 focus mode collapses this whole column so
+        // the terminal card gets full width, matching today's "hide
+        // sidebar" intent.
+        const DOCK_WIDTH: f32 = 84.0;
+        const FLYOUT_WIDTH: f32 = 264.0;
+        const COL_GAP: f32 = 14.0;
+        let session_live = self.config.keep_alive
+            || self
+                .tabs
+                .iter()
+                .any(|t| matches!(&t.state, TabState::Active(s) if s.connected));
+        let mut dock_action = DockAction::None;
         if !self.focus_mode {
-            let mut action = SidebarAction::None;
-            egui::SidePanel::left("sidebar")
-                .resizable(true)
-                .default_width(200.0)
-                .max_width(400.0)
+            let width = 20.0
+                + DOCK_WIDTH
+                + if self.active_flyout.is_some() {
+                    COL_GAP + FLYOUT_WIDTH
+                } else {
+                    0.0
+                }
+                + COL_GAP;
+            egui::SidePanel::left("dock_flyout")
+                .exact_width(width)
+                .resizable(false)
+                .frame(
+                    egui::Frame::none()
+                        .fill(theme::chrome().surface_bg)
+                        .inner_margin(egui::Margin {
+                            left: 20.0,
+                            right: COL_GAP,
+                            top: 20.0,
+                            bottom: 20.0,
+                        }),
+                )
                 .show(ctx, |ui| {
-                    action = sidebar::sidebar_ui(ui, &self.config, &mut self.sidebar);
-                });
-            match action {
-                SidebarAction::ConnectProfile(name) => self.connect_profile(&name, ctx),
-                SidebarAction::DeleteProfile(name) => {
-                    self.config.profiles.remove(&name);
-                    self.config.save().ok();
-                }
-                SidebarAction::RunSnippet(cmd) => {
-                    if let Some(s) = self.active_session() {
-                        let mut bytes = cmd.into_bytes();
-                        bytes.push(b'\n');
-                        s.send_input(bytes);
-                    }
-                }
-                SidebarAction::DeleteSnippet(i) => {
-                    if i < self.config.snippets.len() {
-                        self.config.snippets.remove(i);
-                        self.config.save().ok();
-                    }
-                }
-                SidebarAction::AddSnippet => {
-                    self.modal = Modal::AddSnippet {
-                        name: String::new(),
-                        command: String::new(),
-                    };
-                }
-                SidebarAction::OpenHelp => self.modal = Modal::Help,
-                SidebarAction::ToggleDebugLog => {
-                    self.sidebar.debug_log = !self.sidebar.debug_log;
-                }
-                SidebarAction::OpenLogFolder => {
-                    #[cfg(windows)]
-                    std::process::Command::new("explorer")
-                        .arg(std::env::temp_dir())
-                        .spawn()
-                        .ok();
-                }
-                SidebarAction::OpenFileTools => self.file_tools.open = true,
-                SidebarAction::ToggleKeepAlive => {
-                    self.config.keep_alive = !self.config.keep_alive;
-                    self.config.save().ok();
-                    let on = self.config.keep_alive;
-                    for tab in &mut self.tabs {
-                        if let TabState::Active(s) = &mut tab.state {
-                            s.set_keep_alive(on);
+                    // Computed from the panel's own bounded height (not
+                    // from inside the nested horizontal, whose row height
+                    // starts at 0 and grows with content — reading
+                    // `available_height()` there can observe a transient
+                    // near-zero value on the first frame).
+                    let col_height = ui.available_height().max(100.0);
+                    ui.spacing_mut().item_spacing.x = COL_GAP;
+                    ui.horizontal(|ui| {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(DOCK_WIDTH, col_height),
+                            egui::Layout::top_down(egui::Align::Center),
+                            |ui| {
+                                chrome::card_frame(20.0).show(ui, |ui| {
+                                    ui.set_min_size(egui::vec2(DOCK_WIDTH, col_height));
+                                    dock_action = dock::dock_rail(
+                                        ui,
+                                        self.active_flyout,
+                                        self.file_tools.open,
+                                        session_live,
+                                    );
+                                });
+                            },
+                        );
+                        if let Some(section) = self.active_flyout {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(FLYOUT_WIDTH, col_height),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    chrome::card_frame(20.0)
+                                        .inner_margin(egui::Margin::same(18.0))
+                                        .show(ui, |ui| {
+                                            ui.set_min_size(egui::vec2(
+                                                FLYOUT_WIDTH - 36.0,
+                                                (col_height - 36.0).max(0.0),
+                                            ));
+                                            let a = dock::flyout_ui(
+                                                ui,
+                                                section,
+                                                &self.config,
+                                                &mut self.dock,
+                                            );
+                                            if !matches!(a, DockAction::None) {
+                                                dock_action = a;
+                                            }
+                                        });
+                                },
+                            );
                         }
-                    }
-                }
-                SidebarAction::SetTheme(i) => self.set_theme(i, ctx),
-                SidebarAction::None => {}
+                    });
+                });
+        }
+        match dock_action {
+            DockAction::None => {}
+            DockAction::NewTab => self.new_tab(PendingConn::default()),
+            DockAction::ToggleFlyout(section) => {
+                self.active_flyout = if self.active_flyout == Some(section) {
+                    None
+                } else {
+                    Some(section)
+                };
             }
-            // Persist display prefs when they change.
-            if (self.sidebar.ui_zoom - self.config.ui_zoom).abs() > f32::EPSILON {
-                self.config.ui_zoom = self.sidebar.ui_zoom;
-                ctx.set_zoom_factor(self.sidebar.ui_zoom);
+            DockAction::OpenFileTools => self.file_tools.open = true,
+            DockAction::ConnectProfile(name) => self.connect_profile(&name, ctx),
+            DockAction::DeleteProfile(name) => {
+                self.config.profiles.remove(&name);
                 self.config.save().ok();
             }
+            DockAction::RunSnippet(cmd) => {
+                if let Some(s) = self.active_session() {
+                    let mut bytes = cmd.into_bytes();
+                    bytes.push(b'\n');
+                    s.send_input(bytes);
+                }
+            }
+            DockAction::DeleteSnippet(i) => {
+                if i < self.config.snippets.len() {
+                    self.config.snippets.remove(i);
+                    self.config.save().ok();
+                }
+            }
+            DockAction::AddSnippet => {
+                self.modal = Modal::AddSnippet {
+                    name: String::new(),
+                    command: String::new(),
+                };
+            }
+            DockAction::ToggleDebugLog => {
+                self.dock.debug_log = !self.dock.debug_log;
+            }
+            DockAction::OpenLogFolder => {
+                #[cfg(windows)]
+                std::process::Command::new("explorer")
+                    .arg(std::env::temp_dir())
+                    .spawn()
+                    .ok();
+            }
+            DockAction::ToggleKeepAlive => {
+                self.config.keep_alive = !self.config.keep_alive;
+                self.config.save().ok();
+                let on = self.config.keep_alive;
+                for tab in &mut self.tabs {
+                    if let TabState::Active(s) = &mut tab.state {
+                        s.set_keep_alive(on);
+                    }
+                }
+            }
+            DockAction::SetTheme(i) => self.set_theme(i, ctx),
+        }
+        // Persist display prefs when they change.
+        if (self.dock.ui_zoom - self.config.ui_zoom).abs() > f32::EPSILON {
+            self.config.ui_zoom = self.dock.ui_zoom;
+            ctx.set_zoom_factor(self.dock.ui_zoom);
+            self.config.save().ok();
         }
 
         // Tab bar.
@@ -641,9 +683,20 @@ impl eframe::App for App {
             })
             .collect();
         let mut tab_action = TabAction::None;
-        egui::TopBottomPanel::top("tabbar").show(ctx, |ui| {
-            tab_action = tab_bar(ui, &infos, self.active, self.sync_input, self.focus_mode);
-        });
+        egui::TopBottomPanel::top("tabbar")
+            .exact_height(60.0)
+            .frame(
+                egui::Frame::none()
+                    .fill(theme::chrome().surface_bg)
+                    .inner_margin(egui::Margin::symmetric(20.0, 0.0)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.set_height(60.0);
+                    chrome::logo_with_wordmark(ui);
+                    tab_action = tab_bar(ui, &infos, self.active, self.sync_input, self.focus_mode);
+                });
+            });
         match tab_action {
             TabAction::Select(i) => self.active = i,
             TabAction::New => self.new_tab(PendingConn::default()),
@@ -678,34 +731,51 @@ impl eframe::App for App {
         let modal_open = self.modal.is_open();
         let mut connect_requested = false;
         let mut term_out = render::TermOutput::default();
-        let font_size = self.sidebar.font_size;
+        let font_size = self.dock.font_size;
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::default().fill(theme::current().surface_bg))
+            .frame(
+                egui::Frame::none()
+                    .fill(theme::chrome().surface_bg)
+                    .inner_margin(egui::Margin {
+                        left: 0.0,
+                        right: 20.0,
+                        top: 20.0,
+                        bottom: 20.0,
+                    }),
+            )
             .show(ctx, |ui| {
                 let Some(tab) = self.tabs.get_mut(active) else {
                     return;
                 };
-                match &mut tab.state {
-                    TabState::Form(form) => {
-                        connect_requested = dialogs::connection_form(ui, form);
-                    }
-                    TabState::Active(session) => {
-                        Self::status_bar(ui, session);
-                        if tab.search.open {
-                            Self::find_bar(ui, &mut tab.search, session);
+                chrome::card_frame(20.0)
+                    .fill(theme::chrome().term_bg)
+                    // A hairline inset keeps the terminal canvas's own
+                    // square background fill (painted in render.rs) from
+                    // poking past the card's rounded corners.
+                    .inner_margin(egui::Margin::same(1.0))
+                    .show(ui, |ui| {
+                        ui.set_min_size(ui.available_size().max(egui::Vec2::ZERO));
+                        match &mut tab.state {
+                            TabState::Form(form) => {
+                                connect_requested = dialogs::connection_form(ui, form);
+                            }
+                            TabState::Active(session) => {
+                                chrome::terminal_header(ui, session);
+                                if tab.search.open {
+                                    Self::find_bar(ui, &mut tab.search, session);
+                                }
+                                let input_enabled = !modal_open && !tab.search.open;
+                                term_out = render::terminal_ui(
+                                    ui,
+                                    session,
+                                    &mut tab.search,
+                                    font_size,
+                                    input_enabled,
+                                );
+                            }
                         }
-                        ui.separator();
-                        let input_enabled = !modal_open && !tab.search.open;
-                        term_out = render::terminal_ui(
-                            ui,
-                            session,
-                            &mut tab.search,
-                            font_size,
-                            input_enabled,
-                        );
-                    }
-                }
+                    });
             });
 
         if connect_requested {
@@ -722,11 +792,6 @@ impl eframe::App for App {
         // Modals.
         match &mut self.modal {
             Modal::None => {}
-            Modal::Help => {
-                if !dialogs::help_overlay(ctx) {
-                    self.modal = Modal::None;
-                }
-            }
             Modal::AddSnippet { name, command } => {
                 let mut cancelled = false;
                 let result = dialogs::add_snippet_dialog(ctx, name, command, &mut cancelled);
@@ -838,7 +903,10 @@ impl eframe::App for App {
                         self.sync_input = !self.sync_input;
                         self.modal = Modal::None;
                     }
-                    PaletteAction::OpenHelp => self.modal = Modal::Help,
+                    PaletteAction::OpenHelp => {
+                        self.active_flyout = Some(DockSection::Help);
+                        self.modal = Modal::None;
+                    }
                     PaletteAction::OpenFileTools => {
                         self.file_tools.open = true;
                         self.modal = Modal::None;
