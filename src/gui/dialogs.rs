@@ -79,25 +79,28 @@ pub fn connection_form(ui: &mut egui::Ui, form: &mut PendingConn) -> bool {
 
         let host = form_input(ui, &mut form.host, "user@host[:port]", 280.0, false);
         ui.add_space(8.0);
-        // A plain `ui.horizontal` here reports its allocation as the full
-        // available width rather than shrinking to content, which defeats
-        // `vertical_centered`'s centering — claim the exact width instead.
+        // Claim exactly 280pt (matching the other inputs) so the row
+        // centers identically. Lay out right-to-left: the Browse button
+        // takes its natural width at the right edge, and the key-path
+        // input fills the rest — keeping total width at 280 so the button
+        // never pokes past the other fields' right edge.
         ui.allocate_ui_with_layout(
             egui::vec2(280.0, 38.0),
-            egui::Layout::left_to_right(egui::Align::Center),
+            egui::Layout::right_to_left(egui::Align::Center),
             |ui| {
-                form_input(
-                    ui,
-                    &mut form.key_path,
-                    "optional; default keys auto-detected",
-                    216.0,
-                    false,
-                );
                 if ui.button("Browse…").clicked() {
                     if let Some(path) = rfd::FileDialog::new().pick_file() {
                         form.key_path = path.to_string_lossy().to_string();
                     }
                 }
+                let input_width = ui.available_width();
+                form_input(
+                    ui,
+                    &mut form.key_path,
+                    "optional; default keys auto-detected",
+                    input_width,
+                    false,
+                );
             },
         );
         ui.add_space(8.0);

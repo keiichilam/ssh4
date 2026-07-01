@@ -83,6 +83,7 @@ pub fn tab_bar(
 ) -> TabAction {
     let mut action = TabAction::None;
 
+    // Trailing controls stay in the panel, right-aligned.
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if ui
             .button("🔍")
@@ -103,89 +104,79 @@ pub fn tab_bar(
         if focus.clicked() {
             action = TabAction::ToggleFocusMode;
         }
-        ui.add_space(8.0);
+    });
 
-        // Centered floating pill switcher fills whatever space remains
-        // between the logo (already placed by the caller) and these
-        // trailing icons. `with_layout` alone would shrink-wrap to
-        // content, so the remaining space is claimed explicitly first.
-        let remaining = ui.available_size();
-        ui.allocate_ui_with_layout(
-            remaining,
-            egui::Layout::top_down(egui::Align::Center),
-            |ui| {
-                egui::Frame::none()
-                    .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 128))
-                    .rounding(Rounding::same(14.0))
-                    .inner_margin(egui::Margin::same(4.0))
-                    .show(ui, |ui| {
-                        egui::ScrollArea::horizontal()
-                            .id_source("tabbar")
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.spacing_mut().item_spacing.x = 4.0;
-                                    for (i, tab) in tabs.iter().enumerate() {
-                                        let resp = tab_pill(ui, tab, i == active);
-                                        if resp.clicked() {
-                                            action = TabAction::Select(i);
+    // The floating pill switcher is a genuinely centered, shrink-wrapped
+    // element — nesting it in the panel's row-layout would not center it
+    // over the window (the logo/controls bias it). An `Area` anchored to
+    // the window's horizontal center matches the mockup's "floating pill"
+    // and centers cleanly; the 60pt top strip already reserves the
+    // vertical space so nothing renders underneath it.
+    egui::Area::new(egui::Id::new("tab_switcher"))
+        .anchor(egui::Align2::CENTER_TOP, [0.0, 13.0])
+        .order(egui::Order::Middle)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::none()
+                .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 200))
+                .rounding(Rounding::same(14.0))
+                .inner_margin(egui::Margin::same(4.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        for (i, tab) in tabs.iter().enumerate() {
+                            let resp = tab_pill(ui, tab, i == active);
+                            if resp.clicked() {
+                                action = TabAction::Select(i);
+                            }
+                            if resp.middle_clicked() {
+                                action = TabAction::Close(i);
+                            }
+                            resp.context_menu(|ui| {
+                                if ui.button("Close").clicked() {
+                                    action = TabAction::Close(i);
+                                    ui.close_menu();
+                                }
+                                if ui.button("Close others").clicked() {
+                                    action = TabAction::CloseOthers(i);
+                                    ui.close_menu();
+                                }
+                                if ui.button("Close tabs to the right").clicked() {
+                                    action = TabAction::CloseRight(i);
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                                ui.menu_button("Tab color", |ui| {
+                                    for (name, color) in theme::tab_colors() {
+                                        if ui
+                                            .button(egui::RichText::new(name).color(color))
+                                            .clicked()
+                                        {
+                                            action = TabAction::SetColor(i, Some(color));
+                                            ui.close_menu();
                                         }
-                                        if resp.middle_clicked() {
-                                            action = TabAction::Close(i);
-                                        }
-                                        resp.context_menu(|ui| {
-                                            if ui.button("Close").clicked() {
-                                                action = TabAction::Close(i);
-                                                ui.close_menu();
-                                            }
-                                            if ui.button("Close others").clicked() {
-                                                action = TabAction::CloseOthers(i);
-                                                ui.close_menu();
-                                            }
-                                            if ui.button("Close tabs to the right").clicked() {
-                                                action = TabAction::CloseRight(i);
-                                                ui.close_menu();
-                                            }
-                                            ui.separator();
-                                            ui.menu_button("Tab color", |ui| {
-                                                for (name, color) in theme::tab_colors() {
-                                                    if ui
-                                                        .button(
-                                                            egui::RichText::new(name).color(color),
-                                                        )
-                                                        .clicked()
-                                                    {
-                                                        action =
-                                                            TabAction::SetColor(i, Some(color));
-                                                        ui.close_menu();
-                                                    }
-                                                }
-                                                if ui.button("None").clicked() {
-                                                    action = TabAction::SetColor(i, None);
-                                                    ui.close_menu();
-                                                }
-                                            });
-                                        });
                                     }
-                                    let (rect, resp) = ui.allocate_exact_size(
-                                        egui::vec2(26.0, 26.0),
-                                        egui::Sense::click(),
-                                    );
-                                    ui.painter().text(
-                                        rect.center(),
-                                        egui::Align2::CENTER_CENTER,
-                                        "+",
-                                        theme::font(Weight::SemiBold, 15.0),
-                                        theme::chrome().accent,
-                                    );
-                                    if resp.clicked() {
-                                        action = TabAction::New;
+                                    if ui.button("None").clicked() {
+                                        action = TabAction::SetColor(i, None);
+                                        ui.close_menu();
                                     }
                                 });
                             });
+                        }
+                        let (rect, resp) =
+                            ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+                        ui.painter().text(
+                            rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "+",
+                            theme::font(Weight::SemiBold, 15.0),
+                            theme::chrome().accent,
+                        );
+                        if resp.clicked() {
+                            action = TabAction::New;
+                        }
                     });
-            },
-        );
-    });
+                });
+        });
 
     action
 }

@@ -522,6 +522,65 @@ impl eframe::App for App {
             };
         }
 
+        // Top strip: full-window-width logo + floating pill switcher.
+        // Shown before the dock/central panels so it spans the whole
+        // window (logo in the top-left corner, dock below it) — matching
+        // the mockup. If the dock claimed the left column first, the
+        // strip would only cover the region right of the dock and the
+        // centered pill would drift left into the logo.
+        let infos: Vec<TabInfo> = self
+            .tabs
+            .iter()
+            .map(|t| TabInfo {
+                title: t.title(),
+                color: t.color,
+                connected: matches!(&t.state, TabState::Active(s) if s.connected),
+            })
+            .collect();
+        let mut tab_action = TabAction::None;
+        egui::TopBottomPanel::top("tabbar")
+            .exact_height(60.0)
+            .frame(
+                egui::Frame::none()
+                    .fill(theme::chrome().surface_bg)
+                    .inner_margin(egui::Margin::symmetric(20.0, 0.0)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.set_height(60.0);
+                    chrome::logo_with_wordmark(ui);
+                    tab_action = tab_bar(ui, &infos, self.active, self.sync_input, self.focus_mode);
+                });
+            });
+        match tab_action {
+            TabAction::Select(i) => self.active = i,
+            TabAction::New => self.new_tab(PendingConn::default()),
+            TabAction::Close(i) => self.close_tab(i),
+            TabAction::CloseOthers(i) => {
+                let keep = self.tabs.remove(i);
+                self.tabs.clear();
+                self.tabs.push(keep);
+                self.active = 0;
+            }
+            TabAction::CloseRight(i) => {
+                self.tabs.truncate(i + 1);
+                self.active = self.active.min(i);
+            }
+            TabAction::SetColor(i, c) => {
+                if let Some(t) = self.tabs.get_mut(i) {
+                    t.color = c;
+                }
+            }
+            TabAction::ToggleSyncInput => self.sync_input = !self.sync_input,
+            TabAction::ToggleFocusMode => self.focus_mode = !self.focus_mode,
+            TabAction::OpenTabSearch => {
+                self.modal = Modal::TabSearch {
+                    query: String::new(),
+                }
+            }
+            TabAction::None => {}
+        }
+
         // Dock rail + flyout. F11 focus mode collapses this whole column so
         // the terminal card gets full width, matching today's "hide
         // sidebar" intent.
@@ -670,60 +729,6 @@ impl eframe::App for App {
             self.config.ui_zoom = self.dock.ui_zoom;
             ctx.set_zoom_factor(self.dock.ui_zoom);
             self.config.save().ok();
-        }
-
-        // Tab bar.
-        let infos: Vec<TabInfo> = self
-            .tabs
-            .iter()
-            .map(|t| TabInfo {
-                title: t.title(),
-                color: t.color,
-                connected: matches!(&t.state, TabState::Active(s) if s.connected),
-            })
-            .collect();
-        let mut tab_action = TabAction::None;
-        egui::TopBottomPanel::top("tabbar")
-            .exact_height(60.0)
-            .frame(
-                egui::Frame::none()
-                    .fill(theme::chrome().surface_bg)
-                    .inner_margin(egui::Margin::symmetric(20.0, 0.0)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.set_height(60.0);
-                    chrome::logo_with_wordmark(ui);
-                    tab_action = tab_bar(ui, &infos, self.active, self.sync_input, self.focus_mode);
-                });
-            });
-        match tab_action {
-            TabAction::Select(i) => self.active = i,
-            TabAction::New => self.new_tab(PendingConn::default()),
-            TabAction::Close(i) => self.close_tab(i),
-            TabAction::CloseOthers(i) => {
-                let keep = self.tabs.remove(i);
-                self.tabs.clear();
-                self.tabs.push(keep);
-                self.active = 0;
-            }
-            TabAction::CloseRight(i) => {
-                self.tabs.truncate(i + 1);
-                self.active = self.active.min(i);
-            }
-            TabAction::SetColor(i, c) => {
-                if let Some(t) = self.tabs.get_mut(i) {
-                    t.color = c;
-                }
-            }
-            TabAction::ToggleSyncInput => self.sync_input = !self.sync_input,
-            TabAction::ToggleFocusMode => self.focus_mode = !self.focus_mode,
-            TabAction::OpenTabSearch => {
-                self.modal = Modal::TabSearch {
-                    query: String::new(),
-                }
-            }
-            TabAction::None => {}
         }
 
         // Central panel: connection form or terminal.
