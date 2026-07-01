@@ -109,7 +109,9 @@ src/
     app.rs
     session.rs
     render.rs
-    sidebar.rs
+    dock.rs       (dock rail + contextual flyout, replaces the old sidebar)
+    chrome.rs     (shared gradient/card/logo/header chrome primitives)
+    icons.rs      (hand-drawn dock/flyout icons)
     dialogs.rs
     tabs.rs
     search.rs
@@ -370,7 +372,7 @@ The terminal renderer should keep using a real terminal parser instead of manual
 
 ### 9.3 Theme
 
-Implemented in `src/gui/theme.rs` as a `Theme` struct of named color roles with three built-in themes (Amber Phosphor, Green Phosphor, Paper). The active theme is selected at runtime (sidebar or command palette) and persisted to `~/.ssh4.toml` (`theme = "..."`). Painting code reads colors via `theme::current()`.
+Implemented in `src/gui/theme.rs` as a `Theme` struct of named color roles with three built-in themes (Lavender — light, default — Amber Phosphor, Green Phosphor). The active theme is selected at runtime (the dock's Theme flyout or command palette) and persisted to `~/.ssh4.toml` (`theme = "..."`). Terminal-canvas painting code (`render.rs`) reads colors via `theme::current()`; every other UI surface (dock, flyout, tab switcher, terminal-card frame, dialogs, file tools) reads the fixed FlashLearn chrome palette via `theme::chrome()`, which always resolves to Lavender regardless of the active terminal theme — only the terminal canvas itself re-themes.
 
 `design-system-audit.md` notes token leakage and should be treated as a redevelopment input. A rebuild should centralize:
 

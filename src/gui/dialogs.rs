@@ -2,13 +2,14 @@
 //! upload confirmation, tab search.
 
 use crate::gui::session::PendingConn;
-use crate::gui::theme;
+use crate::gui::theme::{self, Weight};
+use crate::gui::{chrome, icons};
+use egui::{Color32, Rounding};
 use std::path::PathBuf;
 
 /// Modal ownership: while any modal is open, terminal input is not forwarded.
 pub enum Modal {
     None,
-    Help,
     AddSnippet { name: String, command: String },
     Paste { text: String },
     UploadConfirm { paths: Vec<PathBuf>, folder: String },
@@ -29,119 +30,280 @@ pub enum PasteAction {
     Cancel,
 }
 
-/// Render the connection form. Returns true when a connect was requested.
+/// A single 38px-tall, rounding-10, `#e2e8f0`-bordered text input, matching
+/// the connection form's input styling.
+fn form_input(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    hint: &str,
+    width: f32,
+    password: bool,
+) -> egui::Response {
+    ui.scope(|ui| {
+        let v = &mut ui.style_mut().visuals;
+        v.widgets.inactive.rounding = Rounding::same(10.0);
+        v.widgets.inactive.bg_stroke = egui::Stroke::new(1.5, Color32::from_rgb(0xe2, 0xe8, 0xf0));
+        v.widgets.hovered.rounding = Rounding::same(10.0);
+        v.widgets.active.rounding = Rounding::same(10.0);
+        ui.add_sized(
+            [width, 38.0],
+            egui::TextEdit::singleline(text)
+                .hint_text(hint)
+                .password(password),
+        )
+    })
+    .inner
+}
+
+/// Render the connection form: centered content inside the terminal card,
+/// matching the design handoff's "new tab" screen.
 pub fn connection_form(ui: &mut egui::Ui, form: &mut PendingConn) -> bool {
     let mut connect = false;
+    let t = theme::chrome();
     ui.vertical_centered(|ui| {
-        ui.add_space(40.0);
-        ui.heading("New SSH Connection");
-        ui.add_space(16.0);
-        egui::Grid::new("conn_form")
-            .num_columns(2)
-            .spacing([8.0, 10.0])
-            .show(ui, |ui| {
-                ui.label("Host");
-                let host = ui.add(
-                    egui::TextEdit::singleline(&mut form.host)
-                        .hint_text("user@host[:port]")
-                        .desired_width(280.0),
-                );
-                ui.end_row();
+        let top_pad = ((ui.available_height() - 420.0) / 2.0).max(24.0);
+        ui.add_space(top_pad);
+        chrome::logo_tile(ui, 40.0);
+        ui.add_space(14.0);
+        ui.label(
+            egui::RichText::new("New connection")
+                .font(theme::font(Weight::Bold, 17.0))
+                .color(t.text_primary),
+        );
+        ui.label(
+            egui::RichText::new("This tab isn't connected yet")
+                .font(theme::font(Weight::Regular, 12.5))
+                .color(t.text_dim),
+        );
+        ui.add_space(20.0);
 
-                ui.label("Key file");
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut form.key_path)
-                            .hint_text("optional; default keys auto-detected")
-                            .desired_width(216.0),
-                    );
-                    if ui.button("Browse…").clicked() {
-                        if let Some(path) = rfd::FileDialog::new().pick_file() {
-                            form.key_path = path.to_string_lossy().to_string();
-                        }
+        let host = form_input(ui, &mut form.host, "user@host[:port]", 280.0, false);
+        ui.add_space(8.0);
+        // Claim exactly 280pt (matching the other inputs) so the row
+        // centers identically. Lay out right-to-left: the Browse button
+        // takes its natural width at the right edge, and the key-path
+        // input fills the rest — keeping total width at 280 so the button
+        // never pokes past the other fields' right edge.
+        ui.allocate_ui_with_layout(
+            egui::vec2(280.0, 38.0),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                if ui.button("Browse…").clicked() {
+                    if let Some(path) = rfd::FileDialog::new().pick_file() {
+                        form.key_path = path.to_string_lossy().to_string();
                     }
-                });
-                ui.end_row();
-
-                ui.label("Password");
-                ui.add(
-                    egui::TextEdit::singleline(&mut form.password)
-                        .password(true)
-                        .hint_text("optional with key auth")
-                        .desired_width(280.0),
-                );
-                ui.end_row();
-
-                ui.label("Save as");
-                ui.add(
-                    egui::TextEdit::singleline(&mut form.save_as)
-                        .hint_text("profile name (optional)")
-                        .desired_width(280.0),
-                );
-                ui.end_row();
-
-                if host.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    connect = true;
                 }
-            });
-        ui.add_space(12.0);
+                let input_width = ui.available_width();
+                form_input(
+                    ui,
+                    &mut form.key_path,
+                    "optional; default keys auto-detected",
+                    input_width,
+                    false,
+                );
+            },
+        );
+        ui.add_space(8.0);
+        form_input(
+            ui,
+            &mut form.password,
+            "optional with key auth",
+            280.0,
+            true,
+        );
+        ui.add_space(8.0);
+        form_input(
+            ui,
+            &mut form.save_as,
+            "profile name (optional)",
+            280.0,
+            false,
+        );
+        ui.add_space(14.0);
+
         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if ui
-            .add_sized([120.0, 30.0], egui::Button::new("Connect"))
-            .clicked()
-            || enter
-        {
+        if host.lost_focus() && enter {
             connect = true;
         }
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(280.0, 40.0), egui::Sense::click());
+        chrome::paint_gradient(ui, rect, 11.0);
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "Connect →",
+            theme::font(Weight::SemiBold, 14.0),
+            Color32::WHITE,
+        );
+        if resp.clicked() || enter {
+            connect = true;
+        }
+
         if form.connecting {
             ui.add_space(8.0);
-            ui.spinner();
-            ui.label("Connecting…");
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Connecting…");
+            });
         }
         if let Some(err) = &form.error {
             ui.add_space(8.0);
-            ui.colored_label(theme::current().error, err);
+            ui.colored_label(t.error, err);
         }
+
+        ui.add_space(10.0);
+        ui.label(
+            egui::RichText::new("or pick a profile from the dock ←")
+                .font(theme::font(Weight::Regular, 11.5))
+                .color(Color32::from_rgb(0xcb, 0xd5, 0xe1)),
+        );
     });
     connect && !form.connecting
 }
 
-/// Paste confirmation dialog for multiline text.
-pub fn paste_dialog(ctx: &egui::Context, text: &mut String) -> PasteAction {
-    let mut action = PasteAction::None;
-    egui::Window::new("Confirm Paste")
+/// A bottom sheet: scrim + a rounded-top card anchored to the bottom edge,
+/// with a drag-handle bar for affordance (no slide-up animation).
+fn bottom_sheet<R>(
+    ctx: &egui::Context,
+    id: &str,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<R> {
+    chrome::paint_scrim(ctx);
+    let frame = chrome::card_frame(20.0)
+        .rounding(Rounding {
+            nw: 20.0,
+            ne: 20.0,
+            sw: 0.0,
+            se: 0.0,
+        })
+        .inner_margin(egui::Margin {
+            left: 24.0,
+            right: 24.0,
+            top: 10.0,
+            bottom: 20.0,
+        });
+    egui::Window::new(id)
+        .id(egui::Id::new(id))
+        .title_bar(false)
+        .resizable(false)
         .collapsible(false)
-        .resizable(true)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_BOTTOM, [0.0, 0.0])
+        .frame(frame)
         .show(ctx, |ui| {
-            let lines = text.lines().count();
-            ui.label(format!("Pasting {lines} lines:"));
-            egui::ScrollArea::vertical()
-                .max_height(240.0)
-                .show(ui, |ui| {
-                    ui.add(
-                        egui::TextEdit::multiline(text)
-                            .desired_width(420.0)
-                            .font(egui::TextStyle::Monospace),
+            ui.set_width(440.0);
+            chrome::drag_handle(ui);
+            ui.add_space(10.0);
+            add_contents(ui)
+        })
+        .and_then(|ir| ir.inner)
+}
+
+/// A row of `n` equal-width sheet buttons: `(label, primary, enabled)`.
+/// `primary` is filled with the brand gradient, everything else is flat.
+fn sheet_buttons(ui: &mut egui::Ui, buttons: &[(&str, bool, bool)]) -> Option<usize> {
+    let mut clicked = None;
+    ui.columns(buttons.len(), |cols| {
+        for (i, &(label, primary, enabled)) in buttons.iter().enumerate() {
+            let ui = &mut cols[i];
+            ui.add_enabled_ui(enabled, |ui| {
+                let (rect, resp) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 38.0),
+                    egui::Sense::click(),
+                );
+                if primary {
+                    chrome::paint_gradient(ui, rect, 11.0);
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        label,
+                        theme::font(Weight::SemiBold, 12.5),
+                        Color32::WHITE,
                     );
-                });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button("Send").clicked() {
-                    action = PasteAction::Send;
+                } else {
+                    let last = i == buttons.len() - 1;
+                    let fill = if last {
+                        Color32::from_rgb(0xf8, 0xfa, 0xfc)
+                    } else {
+                        Color32::from_rgb(0xf5, 0xf3, 0xff)
+                    };
+                    let text_color = if last {
+                        Color32::from_rgb(0x64, 0x74, 0x8b)
+                    } else {
+                        theme::chrome().accent
+                    };
+                    ui.painter().rect_filled(rect, Rounding::same(11.0), fill);
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        label,
+                        theme::font(Weight::SemiBold, 12.5),
+                        text_color,
+                    );
                 }
-                if ui.button("Send line-by-line").clicked() {
-                    action = PasteAction::SendLineByLine;
-                }
-                if ui.button("Cancel").clicked() {
-                    action = PasteAction::Cancel;
+                if resp.clicked() {
+                    clicked = Some(i);
                 }
             });
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                action = PasteAction::Cancel;
-            }
-        });
-    action
+        }
+    });
+    clicked
+}
+
+/// Multiline-paste confirmation, rendered as a bottom sheet (FR-012).
+pub fn paste_dialog(ctx: &egui::Context, text: &mut String) -> PasteAction {
+    let t = theme::chrome();
+    bottom_sheet(ctx, "paste_sheet", |ui| {
+        let mut action = PasteAction::None;
+        let lines = text.lines().count();
+        ui.label(
+            egui::RichText::new("Paste multiline text?")
+                .font(theme::font(Weight::Bold, 15.0))
+                .color(t.text_primary),
+        );
+        ui.label(
+            egui::RichText::new(format!(
+                "Clipboard contains {lines} lines. Choose how to send them."
+            ))
+            .font(theme::font(Weight::Regular, 12.5))
+            .color(Color32::from_rgb(0x64, 0x74, 0x8b)),
+        );
+        ui.add_space(10.0);
+        egui::Frame::none()
+            .fill(Color32::from_rgb(0xf8, 0xfa, 0xfc))
+            .rounding(Rounding::same(10.0))
+            .inner_margin(egui::Margin::same(10.0))
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(180.0)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(text)
+                                .desired_width(f32::INFINITY)
+                                .frame(false)
+                                .font(egui::TextStyle::Monospace),
+                        );
+                    });
+            });
+        ui.add_space(12.0);
+        match sheet_buttons(
+            ui,
+            &[
+                ("Send", true, true),
+                ("Line-by-line", false, true),
+                ("Cancel", false, true),
+            ],
+        ) {
+            Some(0) => action = PasteAction::Send,
+            Some(1) => action = PasteAction::SendLineByLine,
+            Some(2) => action = PasteAction::Cancel,
+            _ => {}
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            action = PasteAction::Cancel;
+        }
+        action
+    })
+    .unwrap_or(PasteAction::None)
 }
 
 /// Add-snippet dialog. Returns Some((name, command)) on save, and sets
@@ -184,49 +346,85 @@ pub enum UploadAction {
     Cancel,
 }
 
-/// Drag-and-drop upload confirmation.
+/// Drag-and-drop upload confirmation, rendered as a bottom sheet (FR-019).
 pub fn upload_confirm_dialog(
     ctx: &egui::Context,
     paths: &[PathBuf],
     folder: &mut String,
 ) -> UploadAction {
-    let mut action = UploadAction::None;
-    egui::Window::new("Upload Files")
-        .collapsible(false)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .show(ctx, |ui| {
-            ui.label(format!(
-                "Upload {} item(s) to the remote host:",
-                paths.len()
-            ));
-            egui::ScrollArea::vertical()
-                .max_height(160.0)
-                .show(ui, |ui| {
-                    for p in paths {
-                        let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
-                        ui.monospace(format!("{}  ({})", p.display(), human_size(size)));
-                    }
-                });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label("Remote folder name:");
-                ui.text_edit_singleline(folder);
-            });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                let ok = !folder.trim().is_empty();
-                if ui.add_enabled(ok, egui::Button::new("Upload")).clicked() {
-                    action = UploadAction::Confirm;
+    let t = theme::chrome();
+    bottom_sheet(ctx, "upload_sheet", |ui| {
+        let mut action = UploadAction::None;
+        ui.label(
+            egui::RichText::new("Upload to remote")
+                .font(theme::font(Weight::Bold, 15.0))
+                .color(t.text_primary),
+        );
+        ui.add_space(10.0);
+        egui::ScrollArea::vertical()
+            .max_height(160.0)
+            .show(ui, |ui| {
+                for p in paths {
+                    let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+                    let name = p
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| p.display().to_string());
+                    egui::Frame::none()
+                        .fill(Color32::from_rgb(0xf8, 0xfa, 0xfc))
+                        .rounding(Rounding::same(8.0))
+                        .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let (icon_rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(16.0, 16.0),
+                                    egui::Sense::hover(),
+                                );
+                                icons::folder(ui.painter(), icon_rect, t.accent);
+                                ui.label(
+                                    egui::RichText::new(&name)
+                                        .font(theme::font(Weight::Medium, 12.5))
+                                        .color(t.text_primary),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new(human_size(size))
+                                                .font(theme::font(Weight::Regular, 11.0))
+                                                .color(t.text_dim),
+                                        );
+                                    },
+                                );
+                            });
+                        });
+                    ui.add_space(4.0);
                 }
-                if ui.button("Cancel").clicked() {
-                    action = UploadAction::Cancel;
-                }
             });
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                action = UploadAction::Cancel;
-            }
+        ui.add_space(8.0);
+        ui.scope(|ui| {
+            let v = &mut ui.style_mut().visuals;
+            v.widgets.inactive.rounding = Rounding::same(10.0);
+            v.widgets.inactive.bg_stroke =
+                egui::Stroke::new(1.5, Color32::from_rgb(0xe2, 0xe8, 0xf0));
+            ui.add_sized(
+                [ui.available_width(), 36.0],
+                egui::TextEdit::singleline(folder).font(egui::TextStyle::Monospace),
+            );
         });
-    action
+        ui.add_space(12.0);
+        let ok = !folder.trim().is_empty();
+        match sheet_buttons(ui, &[("Upload", true, ok), ("Cancel", false, true)]) {
+            Some(0) => action = UploadAction::Confirm,
+            Some(1) => action = UploadAction::Cancel,
+            _ => {}
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            action = UploadAction::Cancel;
+        }
+        action
+    })
+    .unwrap_or(UploadAction::None)
 }
 
 pub fn human_size(bytes: u64) -> String {
@@ -237,59 +435,6 @@ pub fn human_size(bytes: u64) -> String {
     } else {
         format!("{bytes} B")
     }
-}
-
-/// Help overlay. Returns true while open; false once dismissed.
-pub fn help_overlay(ctx: &egui::Context) -> bool {
-    let mut open = true;
-    egui::Window::new("Help")
-        .collapsible(false)
-        .open(&mut open)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .show(ctx, |ui| {
-            egui::ScrollArea::vertical()
-                .max_height(400.0)
-                .show(ui, |ui| {
-                    ui.heading("Shortcuts");
-                    let rows = [
-                        ("Ctrl+Shift+F", "Find in terminal scrollback"),
-                        ("Ctrl+Shift+P", "Search open tabs"),
-                        ("Ctrl+Shift+K", "Command palette"),
-                        ("Alt+Hover", "Show when a row last changed"),
-                        ("F11", "Toggle focus mode (hide sidebar)"),
-                        ("Ctrl+C", "Copy selection (or send interrupt)"),
-                        ("Ctrl+V", "Paste (multiline opens a dialog)"),
-                        ("Ctrl+P", "Upload clipboard image over SCP"),
-                        ("Enter", "Copy selection when one is active"),
-                        ("Ctrl+Click", "Open URL / copy path under cursor"),
-                        ("Shift+Drag", "Local selection while app uses mouse"),
-                        ("Mouse wheel", "Scrollback (when no TUI owns mouse)"),
-                    ];
-                    egui::Grid::new("help_keys").striped(true).show(ui, |ui| {
-                        for (k, v) in rows {
-                            ui.monospace(k);
-                            ui.label(v);
-                            ui.end_row();
-                        }
-                    });
-                    ui.add_space(8.0);
-                    ui.heading("Behaviors");
-                    ui.label("• Drag & drop files onto a terminal to upload them over SCP.");
-                    ui.label("• Successful connections are saved as profiles automatically.");
-                    ui.label("• Sync input broadcasts typed input to all connected tabs.");
-                    ui.label("• Snippets send their command plus Enter to the active tab.");
-                    ui.label("• Right-click: Copy / Paste / Search online (with a selection).");
-                    ui.label("• The mouse cursor hides while typing; move it to bring it back.");
-                    ui.label("• File tools (sidebar/palette): dual-pane local + remote manager.");
-                    ui.label("• Remote Edit re-uploads the file every time you save it locally.");
-                    ui.label("• Themes persist; pick one in the sidebar Display section.");
-                    ui.label("• Keep alive (sidebar Session) probes idle sessions every 30 s.");
-                });
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                // handled via window close button state below
-            }
-        });
-    open && !ctx.input(|i| i.key_pressed(egui::Key::Escape))
 }
 
 /// Command palette actions (TR-003).
@@ -339,6 +484,28 @@ pub fn filter_palette(entries: &[(String, PaletteAction)], query: &str) -> Vec<u
         .collect()
 }
 
+/// Which eyebrow group a palette entry displays under.
+fn group_of(action: PaletteAction) -> &'static str {
+    match action {
+        PaletteAction::SearchTabs => "NAVIGATE",
+        PaletteAction::NewTab
+        | PaletteAction::CloseTab
+        | PaletteAction::ToggleFocus
+        | PaletteAction::ToggleSync => "SESSION",
+        _ => "TOOLS",
+    }
+}
+
+/// The bound shortcut shown at the right of a palette row, if any.
+fn shortcut_for(action: PaletteAction) -> Option<&'static str> {
+    match action {
+        PaletteAction::SearchTabs => Some("Ctrl Shift P"),
+        PaletteAction::ToggleFocus => Some("F11"),
+        PaletteAction::OpenFileTools => Some("Ctrl Shift K"),
+        _ => None,
+    }
+}
+
 /// Command palette window. Returns the chosen action (or None/Close).
 pub fn command_palette(
     ctx: &egui::Context,
@@ -347,25 +514,63 @@ pub fn command_palette(
     selected: &mut usize,
 ) -> PaletteAction {
     let mut action = PaletteAction::None;
+    let t = theme::chrome();
     let entries = palette_entries(config);
-    let visible = filter_palette(&entries, query);
+    let mut visible = filter_palette(&entries, query);
+    let group_rank = |g: &str| match g {
+        "NAVIGATE" => 0,
+        "SESSION" => 1,
+        _ => 2,
+    };
+    visible.sort_by_key(|&i| group_rank(group_of(entries[i].1)));
+    *selected = (*selected).min(visible.len().saturating_sub(1));
 
+    chrome::paint_scrim(ctx);
     egui::Window::new("Command Palette")
         .collapsible(false)
         .resizable(false)
         .title_bar(false)
-        .anchor(egui::Align2::CENTER_TOP, [0.0, 80.0])
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_TOP, [0.0, 46.0])
+        .frame(chrome::card_frame(22.0).shadow(chrome::shadow(
+            egui::Vec2::new(0.0, 24.0),
+            48.0,
+            Color32::from_rgba_unmultiplied(0x0f, 0x17, 0x2a, 89),
+        )))
         .show(ctx, |ui| {
-            ui.set_min_width(380.0);
-            let edit = ui.add(
-                egui::TextEdit::singleline(query)
-                    .hint_text("Type a command…")
-                    .desired_width(f32::INFINITY),
-            );
-            edit.request_focus();
-            if edit.changed() {
-                *selected = 0;
-            }
+            ui.set_width(380.0);
+            ui.horizontal(|ui| {
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                icons::search(ui.painter(), icon_rect, t.text_dim);
+                let edit = ui.add(
+                    egui::TextEdit::singleline(query)
+                        .hint_text("Type a command or search…")
+                        .frame(false)
+                        .font(theme::font(Weight::Regular, 13.5))
+                        .desired_width(ui.available_width() - 40.0),
+                );
+                edit.request_focus();
+                if edit.changed() {
+                    *selected = 0;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    egui::Frame::none()
+                        .fill(Color32::from_rgb(0xf8, 0xfa, 0xfc))
+                        .rounding(Rounding::same(5.0))
+                        .inner_margin(egui::Margin::symmetric(6.0, 2.0))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new("ESC")
+                                    .font(theme::font(Weight::SemiBold, 10.0))
+                                    .color(t.text_dim),
+                            );
+                        });
+                });
+            });
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
 
             if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
                 *selected = (*selected + 1).min(visible.len().saturating_sub(1));
@@ -375,14 +580,60 @@ pub fn command_palette(
             }
             *selected = (*selected).min(visible.len().saturating_sub(1));
 
-            ui.add_space(4.0);
             egui::ScrollArea::vertical()
                 .max_height(280.0)
                 .show(ui, |ui| {
+                    let mut last_group: Option<&str> = None;
                     for (vis_i, &entry_i) in visible.iter().enumerate() {
                         let (label, act) = &entries[entry_i];
+                        let group = group_of(*act);
+                        if last_group != Some(group) {
+                            if last_group.is_some() {
+                                ui.add_space(8.0);
+                            }
+                            ui.label(
+                                egui::RichText::new(group)
+                                    .font(theme::font(Weight::SemiBold, 10.0))
+                                    .color(Color32::from_rgb(0xcb, 0xd5, 0xe1)),
+                            );
+                            last_group = Some(group);
+                        }
                         let is_sel = vis_i == *selected;
-                        let resp = ui.selectable_label(is_sel, label);
+                        let row = egui::Frame::none()
+                            .fill(if is_sel {
+                                Color32::from_rgb(0xf5, 0xf3, 0xff)
+                            } else {
+                                Color32::TRANSPARENT
+                            })
+                            .rounding(Rounding::same(9.0))
+                            .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(label)
+                                            .font(theme::font(Weight::Medium, 13.0))
+                                            .color(t.text_primary),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if let Some(shortcut) = shortcut_for(*act) {
+                                                ui.label(
+                                                    egui::RichText::new(shortcut)
+                                                        .monospace()
+                                                        .size(10.5)
+                                                        .color(t.text_dim),
+                                                );
+                                            }
+                                        },
+                                    );
+                                });
+                            });
+                        let resp = ui.interact(
+                            row.response.rect,
+                            row.response.id.with("row"),
+                            egui::Sense::click(),
+                        );
                         if is_sel {
                             resp.scroll_to_me(None);
                         }
@@ -433,7 +684,7 @@ mod tests {
             command: "uptime".into(),
         });
         let entries = palette_entries(&config);
-        assert!(entries.iter().any(|(l, _)| l == "Theme: Paper"));
+        assert!(entries.iter().any(|(l, _)| l == "Theme: Lavender"));
         assert!(entries
             .iter()
             .any(|(l, a)| l == "Snippet: uptime" && *a == PaletteAction::RunSnippet(0)));

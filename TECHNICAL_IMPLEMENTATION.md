@@ -212,14 +212,31 @@ Suggested modules:
 
 - `gui/app.rs`: top-level `App` and eframe lifecycle.
 - `gui/session.rs`: `Session`, `PendingConn`, SSH worker state.
-- `gui/render.rs`: terminal canvas and cell painting.
-- `gui/sidebar.rs`: profiles, snippets, debug log, display controls.
-- `gui/tabs.rs`: tab bar, tab color menu, tab search.
-- `gui/dialogs.rs`: help, paste dialog, upload confirmation, add snippet,
-  command palette (TR-003).
+- `gui/render.rs`: terminal canvas and cell painting — the only place that
+  reads `theme::current()` (the switchable terminal theme); everything
+  else in `gui/` reads the fixed chrome palette via `theme::chrome()`.
+- `gui/dock.rs`: the FlashLearn-redesign dock rail (New / Hosts / Snippets
+  / Files / Theme / Session / Help) and its contextual flyout panel;
+  replaces the old fixed sidebar.
+- `gui/chrome.rs`: shared chrome primitives reused across the dock,
+  flyout, terminal card, command palette, and bottom sheets — the brand
+  gradient (baked texture, since egui has no native linear-gradient fill
+  or rounded-mesh clipping), a themed card frame, the logo mark, and the
+  terminal card's status header.
+- `gui/icons.rs`: hand-drawn dock/flyout icon glyphs (procedural
+  `egui::Shape` paths approximating the handoff's Lucide-style icons).
+- `gui/tabs.rs`: floating pill tab switcher, tab color menu, tab search.
+- `gui/dialogs.rs`: connection form, paste dialog and upload confirmation
+  (bottom sheets), add snippet, command palette (TR-003). The Help
+  shortcut reference lives in `gui/dock.rs`'s Help flyout instead of a
+  standalone overlay.
 - `gui/search.rs`: search state and match navigation.
-- `gui/theme.rs`: theme system (TR-004) — named color roles, built-in theme
-  list (Amber Phosphor / Green Phosphor / Paper), runtime switching, fonts.
+- `gui/theme.rs`: theme system (TR-004) — named color roles, built-in
+  theme list (Lavender / Amber Phosphor / Green Phosphor), runtime
+  switching, fonts (bundled Inter for chrome, platform monospace for the
+  terminal canvas). `chrome()` always resolves to the fixed Lavender
+  palette regardless of `current()`/`set_current()` — only the terminal
+  canvas re-themes when the user picks a different theme.
 - `gui/files.rs`: File Tools window — remote pane (TR-001) and local pane
   (TR-002); background threads for all remote operations.
 
